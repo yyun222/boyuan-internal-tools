@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Boyuan Internal Tools</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <button id="menu-btn" class="menu-btn" aria-label="菜单" type="button">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="brand">
+      <img src="/static/logo.png" alt="Logo" class="brand-logo" />
+      <span class="brand-name">Boyuan Internal Tools</span>
+    </div>
+    <div class="topbar-right">
+      <span id="current-user" class="current-user"></span>
+      <button id="logout-btn" class="link-btn">退出</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
+    <aside class="sidebar" id="sidebar">
+      <nav>
+        <ul>
+          <li class="nav-item active" data-view="reconcile">
+            <span class="nav-icon">📊</span>
+            <span class="nav-label">原料库存对账</span>
+          </li>
+
+          <li class="nav-item" onclick="window.location.href='/asset-ledger/'">
+            <span class="nav-icon">?</span>
+            <span class="nav-label">??????</span>
+          </li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section id="view-reconcile" class="view active">
+        <div class="view-header">
+          <h1>原料库存对账</h1>
+          <p class="view-desc">上传三份 Excel 文件，自动比对仓库余额与财务系统库存</p>
+        </div>
+
+        <section class="card upload-card">
+          <h2>① 上传文件</h2>
+          <form id="upload-form">
+            <div class="file-row">
+              <label for="warehouse">
+                <span class="lbl-title">仓库原料库余额表</span>
+                <span class="lbl-hint">.xls 格式 · 列：科目编码 / 科目名称 / 期末借方余额数量</span>
+              </label>
+              <input type="file" id="warehouse" name="warehouse" accept=".xls" required />
+            </div>
+
+            <div class="file-row">
+              <label for="mapping">
+                <span class="lbl-title">代码对应表</span>
+                <span class="lbl-hint">.xlsx 格式 · 列：财务编号 / 物料描述 / 仓库代码 / 仓库名称</span>
+              </label>
+              <input type="file" id="mapping" name="mapping" accept=".xlsx" required />
+            </div>
+
+            <div class="file-row">
+              <label for="finance">
+                <span class="lbl-title">财务系统原料库库存</span>
+                <span class="lbl-hint">.xlsx 格式 · 列：货品编码 / 描述 / 单位 / Warehouse / 结存数量</span>
+              </label>
+              <input type="file" id="finance" name="finance" accept=".xlsx" required />
+            </div>
+
+            <div class="actions">
+              <button type="submit" id="submit-btn">开始对账</button>
+              <span id="status" class="status"></span>
+            </div>
+          </form>
+        </section>
+
+        <section id="results" class="hidden">
+          <div class="card">
+            <div class="card-header">
+              <h2>② 汇总结果</h2>
+              <button id="export-btn" type="button" class="export-btn" title="导出全部对账结果到 Excel">
+                <span class="export-icon">⬇</span> 导出 Excel
+              </button>
+            </div>
+            <div id="summary" class="summary-grid"></div>
+          </div>
+
+          <div class="card">
+            <h2>③ 明细</h2>
+            <div class="tabs" id="tabs">
+              <button class="tab active" data-tab="mismatches">数量差异 <span class="badge" id="badge-mismatches">0</span></button>
+              <button class="tab" data-tab="mapped_no_wh_balance">已映射但仓库无余额 <span class="badge" id="badge-mapped_no_wh_balance">0</span></button>
+              <button class="tab" data-tab="fin_no_mapping">财务系统无映射 <span class="badge" id="badge-fin_no_mapping">0</span></button>
+              <button class="tab" data-tab="wh_only">仅在仓库 <span class="badge" id="badge-wh_only">0</span></button>
+              <button class="tab" data-tab="matches">完全匹配 <span class="badge" id="badge-matches">0</span></button>
+            </div>
+
+            <div class="tab-panel active" data-panel="mismatches">
+              <p class="panel-hint">财务和仓库都有，但数量不一致。按差额绝对值降序排列；红色行表示物料名称疑似不匹配（可能是代码对应表错位）。</p>
+              <div class="table-wrap"><table id="tbl-mismatches"></table></div>
+            </div>
+            <div class="tab-panel" data-panel="mapped_no_wh_balance">
+              <p class="panel-hint">财务系统有该物料，且代码对应表给出了仓库代码，但仓库余额表中查不到该编码。</p>
+              <div class="table-wrap"><table id="tbl-mapped_no_wh_balance"></table></div>
+            </div>
+            <div class="tab-panel" data-panel="fin_no_mapping">
+              <p class="panel-hint">财务系统中存在的物料，在代码对应表里没有对应的仓库代码。</p>
+              <div class="table-wrap"><table id="tbl-fin_no_mapping"></table></div>
+            </div>
+            <div class="tab-panel" data-panel="wh_only">
+              <p class="panel-hint">仓库余额表中存在，但在财务系统中没有对应物料。</p>
+              <div class="table-wrap"><table id="tbl-wh_only"></table></div>
+            </div>
+            <div class="tab-panel" data-panel="matches">
+              <p class="panel-hint">数量完全一致的项目。</p>
+              <div class="table-wrap"><table id="tbl-matches"></table></div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

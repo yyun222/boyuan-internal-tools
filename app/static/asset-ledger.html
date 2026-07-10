@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>设备台账管理</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #20242a;
+      --muted: #65717f;
+      --line: #d8dee6;
+      --blue: #1f6feb;
+      --green: #218838;
+      --amber: #9a6700;
+      --red: #c9342b;
+      --teal: #0f766e;
+      --shadow: 0 8px 20px rgba(19, 28, 38, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      font-size: 14px;
+    }
+
+    button, input, select, textarea { font: inherit; }
+    button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 6px;
+      min-height: 34px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+    button:hover { border-color: #9da9b6; }
+    button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    button.green { background: var(--green); border-color: var(--green); color: #fff; }
+    button.amber { background: #fff7e6; border-color: #d7a84d; color: var(--amber); }
+    button.red { background: #fff1f0; border-color: #e58f8a; color: var(--red); }
+    button.ghost { background: transparent; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 232px 1fr;
+      min-height: 100vh;
+    }
+
+    aside {
+      background: #151b23;
+      color: #dce3ea;
+      padding: 20px 14px;
+    }
+    .brand {
+      padding: 0 8px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+      margin-bottom: 14px;
+    }
+    .brand h1 {
+      margin: 0 0 6px;
+      font-size: 20px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+    .brand p { margin: 0; color: #9fb0c1; font-size: 12px; }
+    .nav button {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0;
+      justify-content: flex-start;
+      color: #dce3ea;
+      border-color: transparent;
+      background: transparent;
+    }
+    .nav button.active { background: #263241; border-color: #364557; }
+    .nav small { margin-left: auto; color: #9fb0c1; }
+
+    main { padding: 20px 22px 26px; min-width: 0; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .topbar h2 { margin: 0; font-size: 22px; letter-spacing: 0; }
+    .topbar p { margin: 4px 0 0; color: var(--muted); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }
+    .stat label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .stat strong { font-size: 24px; line-height: 1; }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+    .filters {
+      display: grid;
+      grid-template-columns: 1.35fr 1fr 1fr 1fr 1fr;
+      gap: 8px;
+      width: 100%;
+    }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      min-height: 34px;
+      padding: 7px 9px;
+      background: #fff;
+      color: var(--ink);
+    }
+    textarea { resize: vertical; min-height: 72px; }
+
+    .table-wrap { overflow: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1080px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 10px;
+      vertical-align: middle;
+      text-align: left;
+      white-space: nowrap;
+    }
+    th {
+      background: #f0f3f6;
+      color: #344252;
+      font-weight: 700;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    td.muted { color: var(--muted); }
+    .row-actions { display: flex; gap: 6px; }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid transparent;
+    }
+    .tag.normal { color: var(--green); background: #eef8f1; border-color: #b7dec0; }
+    .tag.repair { color: var(--amber); background: #fff7e6; border-color: #e8c87a; }
+    .tag.idle { color: var(--teal); background: #e9f7f5; border-color: #9bd4ce; }
+    .tag.scrap { color: var(--red); background: #fff1f0; border-color: #eca19d; }
+    .tag.pending { color: #59636e; background: #f1f3f5; border-color: #cfd6de; }
+
+    .view { display: none; }
+    .view.active { display: block; }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(180px, 1fr));
+      gap: 12px;
+      padding: 14px;
+    }
+    .form-grid .wide { grid-column: 1 / -1; }
+    .field label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+    .required::after { content: " *"; color: var(--red); }
+    .form-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 14px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+    .event {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fff;
+    }
+    .event strong { display: block; margin-bottom: 5px; }
+    .event p { margin: 0; color: var(--muted); line-height: 1.5; }
+
+    .notice {
+      border-left: 4px solid var(--blue);
+      background: #eef5ff;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      color: #284869;
+    }
+
+    .userbox {
+      padding: 10px 8px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+      margin-bottom: 12px;
+      color: #c9d4df;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .userbox strong {
+      display: block;
+      color: #fff;
+      font-size: 14px;
+      margin-bottom: 3px;
+    }
+    .userbox button {
+      margin-top: 8px;
+      width: 100%;
+      min-height: 30px;
+      color: #dce3ea;
+      border-color: #364557;
+      background: #263241;
+    }
+
+    .modal-mask {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 16, 23, 0.42);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      z-index: 10;
+    }
+    .modal-mask.active { display: flex; }
+    .modal {
+      width: min(760px, 100%);
+      max-height: 92vh;
+      overflow: auto;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.24);
+      border: 1px solid var(--line);
+    }
+    .modal h3 {
+      margin: 0;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 18px;
+    }
+
+    .login-mask {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      background: #eef1f5;
+    }
+    .login-mask.active { display: flex; }
+    .login-card {
+      width: min(440px, 100%);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+    .login-card h2 { margin: 0 0 8px; font-size: 22px; }
+    .login-card p { margin: 0 0 16px; color: var(--muted); line-height: 1.5; }
+    .login-card .field { margin-bottom: 12px; }
+    .login-error { min-height: 20px; color: var(--red); margin-bottom: 8px; }
+
+    @media (max-width: 920px) {
+      .app { grid-template-columns: 1fr; }
+      aside { position: sticky; top: 0; z-index: 4; padding: 10px; }
+      .brand { display: none; }
+      .userbox { display: none; }
+      .nav { display: flex; overflow-x: auto; gap: 6px; }
+      .nav button { width: auto; flex: 0 0 auto; }
+      main { padding: 14px; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .stats { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .filters { grid-template-columns: 1fr; }
+      .form-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand">
+        <h1>设备台账管理</h1>
+        <p>实物台账、变更留痕、盘点一致</p>
+      </div>
+      <div class="userbox" id="userBox"></div>
+      <div class="nav" id="nav">
+        <button class="active" data-view="ledger">台账 <small id="navCount">0</small></button>
+        <button data-view="add">新增</button>
+        <button data-view="change">变更</button>
+        <button data-view="inventory">盘点</button>
+        <button data-view="history">记录</button>
+      </div>
+    </aside>
+
+    <main>
+      <section class="view active" id="view-ledger">
+        <div class="topbar">
+          <div>
+            <h2>设备实物台账</h2>
+            <p>采购入库后的设备、现有设备、拆解后待处理设备都在这里维护。</p>
+          </div>
+          <div class="actions">
+            <button class="primary" data-open-add>新增设备</button>
+            <button data-export>导出台账 CSV</button>
+            <button data-seed>恢复导入数据</button>
+          </div>
+        </div>
+
+        <div class="stats" id="stats"></div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div class="filters">
+              <input id="q" placeholder="搜索编号、名称、型号、位置">
+              <select id="siteFilter"></select>
+              <select id="deptFilter"></select>
+              <select id="statusFilter"></select>
+              <select id="checkFilter">
+                <option value="">全部盘点状态</option>
+                <option value="一致">盘点一致</option>
+                <option value="未盘点">未盘点</option>
+                <option value="差异">盘点差异</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>设备编号</th>
+                  <th>设备名称</th>
+                  <th>规格型号</th>
+                  <th>地点</th>
+                  <th>部门/车间</th>
+                  <th>安装/使用位置</th>
+                  <th>启用时间</th>
+                  <th>负责人</th>
+                  <th>状态</th>
+                  <th>盘点</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="assetRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-add">
+        <div class="topbar">
+          <div>
+            <h2>新增设备建账</h2>
+            <p>用于采购入库后建账，或补录历史现有设备。</p>
+          </div>
+        </div>
+        <div class="notice">新增后默认进入“在用”状态；如设备尚未安装，可在状态中选择“待安装”。</div>
+        <div class="panel" id="addPanel"></div>
+      </section>
+
+      <section class="view" id="view-change">
+        <div class="topbar">
+          <div>
+            <h2>资产变更登记</h2>
+            <p>调拨、报废、拆解、移位、状态变化必须登记，系统自动保留记录。</p>
+          </div>
+        </div>
+        <div class="panel" id="changePanel"></div>
+      </section>
+
+      <section class="view" id="view-inventory">
+        <div class="topbar">
+          <div>
+            <h2>盘点登记</h2>
+            <p>按设备编号或名称找到设备，登记实盘位置和结果。</p>
+          </div>
+          <div class="actions">
+            <button data-export-diff>导出差异 CSV</button>
+          </div>
+        </div>
+        <div class="panel" id="inventoryPanel"></div>
+      </section>
+
+      <section class="view" id="view-history">
+        <div class="topbar">
+          <div>
+            <h2>变更与盘点记录</h2>
+            <p>所有新增、调拨、报废、拆解、盘点差异均保留记录。</p>
+          </div>
+          <div class="actions">
+            <button data-export-history>导出记录 CSV</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="timeline" id="historyList"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-mask" id="modalMask">
+    <div class="modal">
+      <h3 id="modalTitle">登记</h3>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <div class="login-mask" id="loginMask">
+    <form class="login-card" id="loginForm">
+      <h2>设备台账登录</h2>
+      <p>账号按“分部门”授权。普通部门只能查看和修改本部门台账，管理员账号可查看全部。</p>
+      <div class="field">
+        <label class="required">账号</label>
+        <input name="username" autocomplete="username" required placeholder="例如 admin 或 dept01">
+      </div>
+      <div class="field">
+        <label class="required">密码</label>
+        <input type="password" name="password" autocomplete="current-password" required placeholder="默认部门账号密码 123456">
+      </div>
+      <div class="login-error" id="loginError"></div>
+      <button class="primary" type="submit" style="width:100%">登录</button>
+    </form>
+  </div>
+
+  <script src="/static/asset_data.js"></script>
+  <script>
+    const sites = ["济阳厂区", "禹城厂区", "银丰研发中心", "公司办公/其他"];
+    const fallbackDepartments = [
+      "生产车间01", "生产车间02", "生产车间03", "生产车间04", "生产车间05",
+      "生产车间06", "生产车间07", "生产车间08", "生产车间09", "生产车间10",
+      "生产车间11", "生产车间12", "生产车间13", "生产车间14", "生产车间15",
+      "生产部", "EHS部", "工程部", "财务部", "销售部", "采购部", "研发中心", "仓储部"
+    ];
+    const departments = window.LEDGER_IMPORT_META?.departments || fallbackDepartments;
+    const accounts = window.APP_ACCOUNTS || [
+      { username: "admin", password: "admin123", displayName: "系统管理员", role: "admin", department: "全部", scope: "all" }
+    ];
+    const statuses = ["在用", "待安装", "安装中", "维修中", "闲置", "拆解待处理", "报废待处置", "已报废"];
+    const changeTypes = ["调拨", "报废", "拆解", "移位", "状态变更", "责任人变更"];
+    const storeKey = "asset-ledger-miniapp-v1";
+
+    let currentUser = JSON.parse(sessionStorage.getItem("asset-ledger-user") || "null");
+    let data = load();
+    const $ = (sel) => document.querySelector(sel);
+    const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+    function load() {
+      if (window.SERVER_STATE) {
+        return JSON.parse(JSON.stringify(window.SERVER_STATE));
+      }
+      const raw = localStorage.getItem(storeKey);
+      const importKey = window.LEDGER_IMPORT_META ? `${window.LEDGER_IMPORT_META.source}:${window.LEDGER_IMPORT_META.assetCount}` : "";
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (!importKey || parsed.importKey === importKey) return parsed;
+        } catch {}
+      }
+      if (window.IMPORTED_ASSETS) {
+        return { importKey, assets: JSON.parse(JSON.stringify(window.IMPORTED_ASSETS)), logs: [] };
+      }
+      return { assets: [], logs: [] };
+    }
+    function save() {
+      if (window.SERVER_MODE) {
+        fetch(window.STATE_API_PATH || "/api/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data)
+        }).catch(() => alert("保存到服务器失败，请检查网络或服务器是否运行。"));
+        return;
+      }
+      localStorage.setItem(storeKey, JSON.stringify(data));
+    }
+    function isAllAccess() { return currentUser && currentUser.scope === "all"; }
+    function canAccessAsset(asset) { return isAllAccess() || (currentUser && asset.department === currentUser.department); }
+    function scopedAssets() { return data.assets.filter(canAccessAsset); }
+    function allowedDepartmentOptions(selected = "") {
+      if (!currentUser || isAllAccess()) return optionList(departments, selected);
+      return optionList([currentUser.department], selected || currentUser.department);
+    }
+    function today() { return new Date().toISOString().slice(0, 10); }
+    function uid() { return "FA-" + Date.now().toString().slice(-8); }
+    function esc(v) {
+      return String(v ?? "").replace(/[&<>"']/g, s => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s]));
+    }
+    function csvValue(v) {
+      const text = String(v ?? "");
+      return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+    }
+    function downloadCsv(name, rows) {
+      const csv = rows.map(row => row.map(csvValue).join(",")).join("\n");
+      const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function log(action, asset, detail) {
+      data.logs.unshift({
+        id: Date.now() + Math.random(),
+        date: today(),
+        action,
+        assetNo: asset.assetNo,
+        assetName: asset.name,
+        department: asset.department,
+        detail
+      });
+    }
+
+    function optionList(items, selected = "", allLabel = "") {
+      const first = allLabel ? `<option value="">${allLabel}</option>` : "";
+      return first + items.map(item => `<option value="${esc(item)}" ${item === selected ? "selected" : ""}>${esc(item)}</option>`).join("");
+    }
+
+    function statusTag(status) {
+      const cls = status === "在用" ? "normal"
+        : status.includes("维修") ? "repair"
+        : status.includes("闲置") || status.includes("拆解") ? "idle"
+        : status.includes("报废") ? "scrap" : "pending";
+      return `<span class="tag ${cls}">${esc(status)}</span>`;
+    }
+
+    function initFilters() {
+      $("#siteFilter").innerHTML = optionList(sites, "", "全部地点");
+      $("#deptFilter").innerHTML = optionList(departments, "", "全部部门");
+      $("#statusFilter").innerHTML = optionList(statuses, "", "全部状态");
+      ["#q", "#siteFilter", "#deptFilter", "#statusFilter", "#checkFilter"].forEach(sel => {
+        $(sel).addEventListener("input", renderLedger);
+      });
+    }
+
+    function filteredAssets() {
+      const q = $("#q").value.trim().toLowerCase();
+      const site = $("#siteFilter").value;
+      const dept = $("#deptFilter").value;
+      const status = $("#statusFilter").value;
+      const check = $("#checkFilter").value;
+      return data.assets.filter(a => {
+        const text = [a.assetNo, a.name, a.model, a.location, a.department, a.owner].join(" ").toLowerCase();
+        return canAccessAsset(a)
+          && (!q || text.includes(q))
+          && (!site || a.site === site)
+          && (!dept || a.department === dept)
+          && (!status || a.status === status)
+          && (!check || a.checkResult === check);
+      });
+    }
+
+    function renderStats() {
+      const visible = scopedAssets();
+      const total = visible.length;
+      const normal = visible.filter(a => a.status === "在用").length;
+      const changeRisk = visible.filter(a => ["拆解待处理", "报废待处置", "待安装", "安装中"].includes(a.status)).length;
+      const unchecked = visible.filter(a => !a.checkResult || a.checkResult === "未盘点").length;
+      const diff = visible.filter(a => a.checkResult === "差异").length;
+      const stats = [
+        ["设备总数", total],
+        ["在用", normal],
+        ["待处理状态", changeRisk],
+        ["未盘点", unchecked],
+        ["盘点差异", diff]
+      ];
+      $("#stats").innerHTML = stats.map(([label, value]) => `<div class="stat"><label>${label}</label><strong>${value}</strong></div>`).join("");
+      $("#navCount").textContent = total;
+    }
+
+    function renderLedger() {
+      renderStats();
+      const rows = filteredAssets();
+      $("#assetRows").innerHTML = rows.length ? rows.map(a => `
+        <tr>
+          <td><strong>${esc(a.assetNo)}</strong></td>
+          <td>${esc(a.name)}</td>
+          <td>${esc(a.model)}</td>
+          <td>${esc(a.site)}</td>
+          <td>${esc(a.department)}</td>
+          <td>${esc(a.location)}</td>
+          <td>${esc(a.startDate)}</td>
+          <td>${esc(a.owner)}</td>
+          <td>${statusTag(a.status)}</td>
+          <td>${esc(a.checkResult || "未盘点")}</td>
+          <td>
+            <div class="row-actions">
+              <button onclick="openChange('${a.id}')">变更</button>
+              <button onclick="openInventory('${a.id}')">盘点</button>
+            </div>
+          </td>
+        </tr>
+      `).join("") : `<tr><td colspan="11" class="muted">暂无设备台账。请先新增或载入示例。</td></tr>`;
+    }
+
+    function assetForm(asset = {}) {
+      return `
+        <form id="assetForm">
+          <div class="form-grid">
+            <div class="field"><label class="required">设备编号</label><input name="assetNo" required value="${esc(asset.assetNo || uid())}"></div>
+            <div class="field"><label class="required">设备名称</label><input name="name" required value="${esc(asset.name || "")}"></div>
+            <div class="field"><label class="required">规格型号</label><input name="model" required value="${esc(asset.model || "")}"></div>
+            <div class="field"><label class="required">所属地点</label><select name="site" required>${optionList(sites, asset.site)}</select></div>
+            <div class="field"><label class="required">分部门</label><select name="department" required>${allowedDepartmentOptions(asset.department)}</select></div>
+            <div class="field"><label class="required">状态</label><select name="status" required>${optionList(statuses, asset.status || "在用")}</select></div>
+            <div class="field"><label class="required">安装/使用位置</label><input name="location" required value="${esc(asset.location || "")}"></div>
+            <div class="field"><label class="required">启用时间</label><input type="date" name="startDate" required value="${esc(asset.startDate || today())}"></div>
+            <div class="field"><label class="required">部门负责人</label><input name="manager" required value="${esc(asset.manager || "")}"></div>
+            <div class="field"><label class="required">资产管理员</label><input name="admin" required value="${esc(asset.admin || "")}"></div>
+            <div class="field"><label class="required">使用责任人</label><input name="owner" required value="${esc(asset.owner || "")}"></div>
+            <div class="field"><label>最近盘点结果</label><select name="checkResult">${optionList(["未盘点", "一致", "差异"], asset.checkResult || "未盘点")}</select></div>
+            <div class="field wide"><label>备注</label><textarea name="remark">${esc(asset.remark || "")}</textarea></div>
+          </div>
+          <div class="form-footer">
+            <button type="button" data-close-modal>取消</button>
+            <button class="primary" type="submit">保存</button>
+          </div>
+        </form>`;
+    }
+
+    function collectForm(form) {
+      return Object.fromEntries(new FormData(form).entries());
+    }
+
+    function renderAddPanel() {
+      $("#addPanel").innerHTML = assetForm();
+      $("#addPanel form").addEventListener("submit", (e) => {
+        e.preventDefault();
+        addAsset(collectForm(e.target));
+        e.target.reset();
+        switchView("ledger");
+      });
+    }
+
+    function addAsset(values) {
+      if (!isAllAccess()) values.department = currentUser.department;
+      const asset = {
+        id: String(Date.now() + Math.random()),
+        createdAt: today(),
+        updatedAt: today(),
+        ...values
+      };
+      data.assets.unshift(asset);
+      log("新增建账", asset, `设备入账，位置：${asset.location}，责任人：${asset.owner}`);
+      save();
+      renderAll();
+    }
+
+    function changeForm(asset) {
+      const availableAssets = scopedAssets();
+      if (!availableAssets.length) {
+        return `<div class="notice">当前账号没有可变更的设备。</div>`;
+      }
+      return `
+        <form id="changeForm">
+          <div class="form-grid">
+            <div class="field wide"><label class="required">选择设备</label><select name="id" required>${availableAssets.map(a => `<option value="${a.id}" ${asset && a.id === asset.id ? "selected" : ""}>${esc(a.assetNo)} - ${esc(a.name)} - ${esc(a.department)}</option>`).join("")}</select></div>
+            <div class="field"><label class="required">变更类型</label><select name="type" required>${optionList(changeTypes)}</select></div>
+            <div class="field"><label>新地点</label><select name="site"><option value="">不变</option>${optionList(sites)}</select></div>
+            <div class="field"><label>新部门/车间</label><select name="department"><option value="">不变</option>${optionList(departments)}</select></div>
+            <div class="field"><label>新位置</label><input name="location" placeholder="不变可留空"></div>
+            <div class="field"><label>新状态</label><select name="status"><option value="">不变</option>${optionList(statuses)}</select></div>
+            <div class="field"><label>新使用责任人</label><input name="owner" placeholder="不变可留空"></div>
+            <div class="field wide"><label class="required">变更原因/说明</label><textarea name="reason" required></textarea></div>
+          </div>
+          <div class="form-footer">
+            <button type="button" data-close-modal>取消</button>
+            <button class="primary" type="submit">提交登记</button>
+          </div>
+        </form>`;
+    }
+
+    function renderChangePanel() {
+      $("#changePanel").innerHTML = changeForm(data.assets[0]);
+      $("#changePanel form")?.addEventListener("submit", submitChange);
+    }
+
+    function submitChange(e) {
+      e.preventDefault();
+      const v = collectForm(e.target);
+      applyChange(v);
+      e.target.reset();
+      switchView("ledger");
+    }
+
+    function applyChange(v) {
+      const asset = data.assets.find(a => a.id === v.id);
+      if (!asset || !canAccessAsset(asset)) return;
+      const before = `${asset.site}/${asset.department}/${asset.location}/${asset.status}/${asset.owner}`;
+      ["site", "department", "location", "status", "owner"].forEach(k => { if (v[k]) asset[k] = v[k]; });
+      asset.updatedAt = today();
+      const after = `${asset.site}/${asset.department}/${asset.location}/${asset.status}/${asset.owner}`;
+      log(v.type, asset, `${v.reason}。变更前：${before}；变更后：${after}`);
+      save();
+      renderAll();
+    }
+
+    function inventoryForm(asset) {
+      const availableAssets = scopedAssets();
+      if (!availableAssets.length) {
+        return `<div class="notice">当前账号没有可盘点的设备。</div>`;
+      }
+      return `
+        <form id="inventoryForm">
+          <div class="form-grid">
+            <div class="field wide"><label class="required">选择设备</label><select name="id" required>${availableAssets.map(a => `<option value="${a.id}" ${asset && a.id === asset.id ? "selected" : ""}>${esc(a.assetNo)} - ${esc(a.name)} - 台账位置：${esc(a.location)}</option>`).join("")}</select></div>
+            <div class="field"><label class="required">实盘结果</label><select name="checkResult" required>${optionList(["一致", "差异"])}</select></div>
+            <div class="field"><label class="required">实盘位置</label><input name="actualLocation" required value="${esc(asset ? asset.location : "")}"></div>
+            <div class="field"><label class="required">盘点人</label><input name="checker" required></div>
+            <div class="field wide"><label>差异说明/整改措施</label><textarea name="note"></textarea></div>
+          </div>
+          <div class="form-footer">
+            <button type="button" data-close-modal>取消</button>
+            <button class="green" type="submit">保存盘点</button>
+          </div>
+        </form>`;
+    }
+
+    function renderInventoryPanel() {
+      $("#inventoryPanel").innerHTML = inventoryForm(data.assets[0]);
+      $("#inventoryPanel form")?.addEventListener("submit", submitInventory);
+    }
+
+    function submitInventory(e) {
+      e.preventDefault();
+      const v = collectForm(e.target);
+      const asset = data.assets.find(a => a.id === v.id);
+      if (!asset || !canAccessAsset(asset)) return;
+      asset.checkResult = v.checkResult;
+      asset.lastCheckDate = today();
+      asset.actualLocation = v.actualLocation;
+      asset.updatedAt = today();
+      log("盘点登记", asset, `结果：${v.checkResult}；实盘位置：${v.actualLocation}；盘点人：${v.checker}；${v.note || ""}`);
+      save();
+      renderAll();
+      switchView("ledger");
+    }
+
+    function renderHistory() {
+      const visibleLogs = data.logs.filter(l => isAllAccess() || (currentUser && l.department === currentUser.department));
+      $("#historyList").innerHTML = visibleLogs.length ? visibleLogs.map(l => `
+        <div class="event">
+          <strong>${esc(l.date)} ｜ ${esc(l.action)} ｜ ${esc(l.assetNo)} ${esc(l.assetName)}</strong>
+          <p>${esc(l.department)}：${esc(l.detail)}</p>
+        </div>
+      `).join("") : `<div class="event"><strong>暂无记录</strong><p>新增、变更和盘点后会自动生成记录。</p></div>`;
+    }
+
+    function openModal(title, html, onSubmit) {
+      $("#modalTitle").textContent = title;
+      $("#modalBody").innerHTML = html;
+      $("#modalMask").classList.add("active");
+      $("#modalBody form")?.addEventListener("submit", onSubmit);
+      $$("[data-close-modal]").forEach(btn => btn.addEventListener("click", closeModal));
+    }
+    function closeModal() { $("#modalMask").classList.remove("active"); }
+    window.openChange = (id) => {
+      const asset = data.assets.find(a => a.id === id);
+      openModal("资产变更登记", changeForm(asset), (e) => {
+        e.preventDefault();
+        applyChange(collectForm(e.target));
+        closeModal();
+      });
+    };
+    window.openInventory = (id) => {
+      const asset = data.assets.find(a => a.id === id);
+      openModal("盘点登记", inventoryForm(asset), (e) => {
+        e.preventDefault();
+        submitInventory(e);
+        closeModal();
+      });
+    };
+
+    function switchView(view) {
+      $$(".view").forEach(el => el.classList.remove("active"));
+      $(`#view-${view}`).classList.add("active");
+      $$("#nav button").forEach(btn => btn.classList.toggle("active", btn.dataset.view === view));
+      if (view === "add") renderAddPanel();
+      if (view === "change") renderChangePanel();
+      if (view === "inventory") renderInventoryPanel();
+      if (view === "history") renderHistory();
+    }
+
+    function exportLedger() {
+      const rows = [["设备编号","设备名称","规格型号","地点","分部门","使用部门","安装/使用位置","启用时间","部门负责人","资产管理员","使用责任人","状态","盘点结果","最近盘点日期","备注"]];
+      scopedAssets().forEach(a => rows.push([a.assetNo,a.name,a.model,a.site,a.department,a.useDepartment || "",a.location,a.startDate,a.manager,a.admin,a.owner,a.status,a.checkResult || "未盘点",a.lastCheckDate || "",a.remark || ""]));
+      downloadCsv("设备实物台账.csv", rows);
+    }
+    function exportHistory() {
+      const rows = [["日期","动作","设备编号","设备名称","部门","详情"]];
+      data.logs.filter(l => isAllAccess() || (currentUser && l.department === currentUser.department)).forEach(l => rows.push([l.date,l.action,l.assetNo,l.assetName,l.department,l.detail]));
+      downloadCsv("设备变更记录.csv", rows);
+    }
+    function exportDiff() {
+      const rows = [["设备编号","设备名称","台账位置","实盘位置","部门","责任人","盘点结果","盘点日期"]];
+      scopedAssets().filter(a => a.checkResult === "差异").forEach(a => rows.push([a.assetNo,a.name,a.location,a.actualLocation || "",a.department,a.owner,a.checkResult,a.lastCheckDate || ""]));
+      downloadCsv("盘点差异清单.csv", rows);
+    }
+
+    function seedData() {
+      if (window.IMPORTED_ASSETS) {
+        data = {
+          importKey: `${window.LEDGER_IMPORT_META.source}:${window.LEDGER_IMPORT_META.assetCount}`,
+          assets: JSON.parse(JSON.stringify(window.IMPORTED_ASSETS)),
+          logs: []
+        };
+        save();
+        renderAll();
+        return;
+      }
+      const sample = [
+        ["BY-2-R00-2401001", "反应釜", "3000L", "济阳厂区", "生产车间01", "一车间A线", "2024-01-16", "张主任", "李管理员", "王工", "在用"],
+        ["BY-2-AYX-2308002", "液相色谱仪", "LC-2030", "银丰研发中心", "研发中心", "研发楼二层仪器室", "2023-08-03", "赵经理", "孙管理员", "刘工", "在用"],
+        ["AL-2-P00-2206003", "真空泵", "2BV-5110", "禹城厂区", "生产车间05", "五车间真空泵区", "2022-06-21", "周主任", "陈管理员", "马工", "维修中"],
+        ["BY-2-X00-2105004", "包装机", "BZD-800", "济阳厂区", "生产车间12", "包装间南侧", "2021-05-09", "吴主任", "郑管理员", "韩工", "拆解待处理"]
+      ];
+      data.assets = sample.map(s => ({
+        id: String(Date.now() + Math.random()),
+        assetNo: s[0], name: s[1], model: s[2], site: s[3], department: s[4],
+        location: s[5], startDate: s[6], manager: s[7], admin: s[8], owner: s[9],
+        status: s[10], checkResult: "未盘点", remark: "", createdAt: today(), updatedAt: today()
+      }));
+      data.logs = [];
+      data.assets.forEach(a => log("示例建账", a, `载入示例设备，位置：${a.location}`));
+      save();
+      renderAll();
+    }
+
+    function renderAll() {
+      renderUserBox();
+      renderLedger();
+      renderHistory();
+      renderAddPanel();
+      renderChangePanel();
+      renderInventoryPanel();
+    }
+
+    function renderUserBox() {
+      if (!currentUser) {
+        $("#userBox").innerHTML = "";
+        return;
+      }
+      $("#userBox").innerHTML = `
+        <strong>${esc(currentUser.displayName)}</strong>
+        <div>账号：${esc(currentUser.username)}</div>
+        <div>权限：${isAllAccess() ? "查看全部" : esc(currentUser.department)}</div>
+        <button data-logout>退出登录</button>
+      `;
+    }
+
+    function showLogin() {
+      $("#loginMask").classList.add("active");
+    }
+
+    function hideLogin() {
+      $("#loginMask").classList.remove("active");
+    }
+
+    $("#loginForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const v = Object.fromEntries(new FormData(e.target).entries());
+      const found = accounts.find(a => a.username === v.username && a.password === v.password);
+      if (!found) {
+        $("#loginError").textContent = "账号或密码不正确";
+        return;
+      }
+      currentUser = { ...found };
+      sessionStorage.setItem("asset-ledger-user", JSON.stringify(currentUser));
+      $("#loginError").textContent = "";
+      hideLogin();
+      renderAll();
+    });
+
+    $("#nav").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-view]");
+      if (btn) switchView(btn.dataset.view);
+    });
+    document.addEventListener("click", (e) => {
+      if (e.target.matches("[data-open-add]")) switchView("add");
+      if (e.target.matches("[data-export]")) exportLedger();
+      if (e.target.matches("[data-export-history]")) exportHistory();
+      if (e.target.matches("[data-export-diff]")) exportDiff();
+      if (e.target.matches("[data-seed]")) seedData();
+      if (e.target.matches("[data-logout]")) {
+        sessionStorage.removeItem("asset-ledger-user");
+        currentUser = null;
+        renderUserBox();
+        showLogin();
+      }
+    });
+    $("#modalMask").addEventListener("click", (e) => {
+      if (e.target.id === "modalMask") closeModal();
+    });
+
+    initFilters();
+    save();
+    if (!currentUser) showLogin();
+    renderAll();
+  </script>
+</body>
+</html>

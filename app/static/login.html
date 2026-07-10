@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 · Boyuan Internal Tools</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="login-body">
+  <div class="login-card">
+    <div class="login-brand">
+      <img src="/static/logo.png" alt="Logo" class="login-logo" />
+    </div>
+    <form id="login-form" class="login-form">
+      <label>
+        <span>用户名</span>
+        <input type="text" id="username" autocomplete="username" required autofocus />
+      </label>
+      <label>
+        <span>密码</span>
+        <input type="password" id="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit" id="login-btn">登录</button>
+      <div id="login-error" class="login-error"></div>
+    </form>
+  </div>
+
+  <script>
+    const form = document.getElementById("login-form");
+    const errEl = document.getElementById("login-error");
+    const btn = document.getElementById("login-btn");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errEl.textContent = "";
+      btn.disabled = true;
+      try {
+        const resp = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value,
+          }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || "登录失败");
+        }
+        window.location.href = "/";
+      } catch (err) {
+        errEl.textContent = err.message || String(err);
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
