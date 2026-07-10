@@ -31,9 +31,19 @@
             <span class="nav-label">原料库存对账</span>
           </li>
 
-          <li class="nav-item" onclick="window.location.href='/asset-ledger/'">
-            <span class="nav-icon">?</span>
-            <span class="nav-label">??????</span>
+          <li class="nav-item" id="asset-ledger-nav" data-view="asset-ledger">
+            <span class="nav-icon">🏷️</span>
+            <span class="nav-label">固定资产台账</span>
+          </li>
+
+          <li class="nav-item hidden" data-view="admin" id="admin-nav">
+            <span class="nav-icon">⚙</span>
+            <span class="nav-label">用户管理</span>
+          </li>
+
+          <li class="nav-item hidden" data-view="activity-logs" id="activity-logs-nav">
+            <span class="nav-icon">🧾</span>
+            <span class="nav-label">活动日志</span>
           </li>
         </ul>
       </nav>
@@ -124,6 +134,118 @@
           </div>
         </section>
       </section>
+
+      <section id="view-asset-ledger" class="view">
+        <div class="view-header asset-ledger-head">
+          <div>
+            <h1>固定资产台账</h1>
+            <p class="view-desc">实物台账、状态变更、盘点记录统一维护</p>
+          </div>
+          <div class="asset-toolbar">
+            <button class="primary" type="button" data-asset-add>新增</button>
+            <button type="button" data-asset-inventory>盘点</button>
+            <button type="button" data-asset-history>记录</button>
+            <button type="button" data-asset-export>导出台账 CSV</button>
+          </div>
+        </div>
+
+        <div class="asset-stats" id="asset-stats"></div>
+
+        <section class="card asset-ledger-card">
+          <div class="asset-filters">
+            <input id="asset-q" placeholder="搜索编号、名称、型号、位置" />
+            <select id="asset-site-filter"></select>
+            <select id="asset-dept-filter"></select>
+            <select id="asset-status-filter"></select>
+            <select id="asset-check-filter">
+              <option value="">全部盘点状态</option>
+              <option value="一致">盘点一致</option>
+              <option value="未盘点">未盘点</option>
+              <option value="差异">盘点差异</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table id="asset-table">
+              <thead>
+                <tr>
+                  <th>设备编号</th>
+                  <th>设备名称</th>
+                  <th>规格型号</th>
+                  <th>地点</th>
+                  <th>部门/车间</th>
+                  <th>安装/使用位置</th>
+                  <th>启用时间</th>
+                  <th>负责人</th>
+                  <th>状态</th>
+                  <th>盘点</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="asset-rows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card asset-history-card hidden" id="asset-history-card">
+          <div class="card-header">
+            <h2>变更与盘点记录</h2>
+            <button type="button" data-asset-export-history>导出记录 CSV</button>
+          </div>
+          <div class="asset-timeline" id="asset-history-list"></div>
+          <div class="asset-history-pagination" id="asset-history-pagination"></div>
+        </section>
+      </section>
+
+      <section id="view-admin" class="view">
+        <div class="view-header">
+          <h1>用户管理</h1>
+          <p class="view-desc">邀请用户并分配角色</p>
+        </div>
+
+        <section class="card admin-card">
+          <h2>邀请新用户</h2>
+          <form id="invite-form" class="admin-form">
+            <label>
+              <span>邮箱</span>
+              <input type="email" id="invite-email" placeholder="name@boyuanpharm.com" required />
+            </label>
+            <label>
+              <span>显示名称</span>
+              <input type="text" id="invite-name" />
+            </label>
+            <div class="admin-field-wide">
+              <span class="admin-label">角色</span>
+              <div id="role-options" class="role-options"></div>
+            </div>
+            <div class="admin-field-wide admin-actions">
+              <button type="submit" id="invite-btn">邀请用户</button>
+              <span id="invite-status" class="status"></span>
+            </div>
+          </form>
+          <div id="invite-link" class="invite-link hidden"></div>
+        </section>
+      </section>
+
+      <section id="view-activity-logs" class="view">
+        <div class="view-header">
+          <h1>活动日志</h1>
+          <p class="view-desc">系统保存新增、修改、导出、邀请等非浏览类操作</p>
+        </div>
+        <section class="card admin-card">
+          <div class="card-header">
+            <h2>操作日志</h2>
+            <button type="button" id="refresh-logs">刷新</button>
+          </div>
+          <div class="table-wrap"><table id="activity-log-table"></table></div>
+        </section>
+      </section>
+
+      <div class="modal-mask" id="asset-modal-mask">
+        <div class="asset-modal">
+          <h3 id="asset-modal-title">登记</h3>
+          <div id="asset-modal-body"></div>
+        </div>
+      </div>
     </main>
   </div>
 

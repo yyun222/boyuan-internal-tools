@@ -7,12 +7,10 @@ Internal FastAPI tools for Boyuan operations.
 ```text
 app/
   main.py              FastAPI routes and session handling
+  database.py          Database engine/session setup
+  schema.py            SQLAlchemy tables, roles, and seed data
   services/           Reconciliation and Excel export logic
   static/             Browser UI assets
-data/
-  ledger-state.json   Local/runtime asset ledger state
-samples/
-  test_data.js        Imported sample asset data
 assets/
   logo-original.png   Source logo asset
 ```
@@ -25,3 +23,12 @@ uvicorn app.main:app --reload
 ```
 
 The app listens on `http://127.0.0.1:8000`.
+
+By default the app connects to MySQL at:
+
+```text
+mysql+pymysql://root:123123@127.0.0.1:3306/boyuan_internal_tools
+```
+
+Override it with `BOYUAN_DATABASE_URL` if needed. On first startup the app creates the database tables and bootstraps `root@boyuanpharm.com` with password `123123`.
+The fixed-asset ledger is stored in MySQL tables.

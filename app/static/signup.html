@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>设置密码 · Boyuan Internal Tools</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="login-body">
+  <div class="login-card">
+    <div class="login-brand">
+      <img src="/static/logo.png" alt="Logo" class="login-logo" />
+    </div>
+    <form id="signup-form" class="login-form">
+      <label>
+        <span>邮箱</span>
+        <input type="email" id="email" autocomplete="username" required autofocus />
+      </label>
+      <label>
+        <span>姓名</span>
+        <input type="text" id="display-name" autocomplete="name" />
+      </label>
+      <label>
+        <span>密码</span>
+        <input type="password" id="password" autocomplete="new-password" minlength="8" required />
+      </label>
+      <button type="submit" id="signup-btn">设置密码</button>
+      <div id="signup-error" class="login-error"></div>
+      <a class="login-link" href="/login">返回登录</a>
+    </form>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    document.getElementById("email").value = params.get("email") || "";
+
+    const form = document.getElementById("signup-form");
+    const errEl = document.getElementById("signup-error");
+    const btn = document.getElementById("signup-btn");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errEl.textContent = "";
+      btn.disabled = true;
+      try {
+        const resp = await fetch("/api/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: document.getElementById("email").value,
+            password: document.getElementById("password").value,
+            display_name: document.getElementById("display-name").value,
+          }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || "注册失败");
+        }
+        window.location.href = "/";
+      } catch (err) {
+        errEl.textContent = err.message || String(err);
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

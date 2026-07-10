@@ -57,7 +57,6 @@ tar --exclude='boyuan/.venv' \
     --exclude='boyuan/.git' \
     --exclude='boyuan/.claude' \
     --exclude='boyuan/.env' \
-    --exclude='boyuan/data/ledger-state.json' \
     --exclude='boyuan/samples/*.xls' \
     --exclude='boyuan/samples/*.xlsx' \
     -czf boyuan.tgz boyuan/
@@ -87,14 +86,10 @@ cd boyuan
 SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
 echo "BOYUAN_SESSION_SECRET=$SECRET" > .env
 
-# 3. 首次部署时创建持久化台账文件；已有文件不会被覆盖
-mkdir -p data
-test -f data/ledger-state.json || printf '{"assets":[],"logs":[]}\n' > data/ledger-state.json
-
-# 4. 构建并启动（首次约 1–2 分钟）
+# 3. 构建并启动（首次约 1–2 分钟）
 docker compose up -d --build
 
-# 5. 看日志确认启动成功
+# 4. 看日志确认启动成功
 docker compose logs -f
 ```
 
@@ -110,7 +105,7 @@ docker compose logs -f
 http://<IP>:8000
 ```
 
-账号 `root`，密码 `123123`。
+账号 `root@boyuanpharm.com`，密码 `123123`。
 
 ---
 
@@ -141,7 +136,6 @@ cd /Users/lyy/work
 tar --exclude='boyuan/.venv' --exclude='boyuan/__pycache__' \
     --exclude='boyuan/.DS_Store' --exclude='boyuan/.git' \
     --exclude='boyuan/.claude' --exclude='boyuan/.env' \
-    --exclude='boyuan/data/ledger-state.json' \
     --exclude='boyuan/samples/*.xls' --exclude='boyuan/samples/*.xlsx' \
     -czf boyuan.tgz boyuan/
 scp boyuan.tgz root@<IP>:/root/
@@ -152,12 +146,10 @@ scp boyuan.tgz root@<IP>:/root/
 cd /root
 tar -xzf boyuan.tgz   # 覆盖式解压
 cd boyuan
-mkdir -p data
-test -f data/ledger-state.json || printf '{"assets":[],"logs":[]}\n' > data/ledger-state.json
 docker compose up -d --build
 ```
 
-`data/ledger-state.json` 是服务器上的持久化数据文件，不要从本地打包上传覆盖。`docker-compose.yml` 会把服务器当前目录的 `data/` 挂载到容器内的 `/app/data`，所以应用里的更新会写回服务器磁盘。
+固定资产台账数据现在存储在 MySQL 表中，不再依赖本地 JSON 数据文件。
 
 ---
 
@@ -165,7 +157,7 @@ docker compose up -d --build
 
 1. **改 SSH 端口**：把默认 22 端口改掉，加防火墙规则；减少暴力破解。
 2. **改 root 密码或禁 root 登录**：用普通用户 + sudo。
-3. **改应用密码**：编辑 `app/main.py` 顶部 `USERS = {"root": "123123"}`，换成更强的密码后重新部署。
+3. **改初始管理员密码**：首次启动会创建 `root@boyuanpharm.com` / `123123`。登录后请通过邀请流程创建新的管理员账号，确认可登录后停用或替换初始账号。
 4. **(后续) 申请备案域名 + HTTPS**：拿到备案号后，把腾讯云 SSL 证书装上，加 nginx 做 80/443 反代。
 
 ---
