@@ -26,8 +26,15 @@ from app.auth import (
     utcnow,
     verify_password,
 )
-from app.database import SessionLocal, engine, get_db
-from app.schema import ActivityLog, AssetLedgerAsset, AssetLedgerLog, Role, User, init_database
+from app.db import SessionLocal, engine, get_db, init_database
+from app.db.models import (
+    ActivityLog, AssetLedgerAsset, AssetLedgerLog, Role, StockOrder,
+    StockOrderChangeLog, StockOrderFieldUpdate, User,
+)
+from app.services.stock_orders import (
+    FIELD_META, MODULES, can_edit_module, clean_fields, field_locks, is_admin,
+    order_payload,
+)
 from app.services.export import build_workbook
 from app.services.reconcile import reconcile
 
@@ -150,6 +157,8 @@ def _user_payload(user: User) -> dict:
             "updateReconcile": _has_permission(user, "can_update_reconcile"),
             "viewAssetLedger": _has_permission(user, "can_view_asset_ledger"),
             "updateAssetLedger": _has_permission(user, "can_update_asset_ledger"),
+            "viewStockOrders": _has_permission(user, "can_view_stock_orders"),
+            "updateStockOrders": _has_permission(user, "can_update_stock_orders"),
             "viewActivityLogs": _has_permission(user, "can_view_activity_logs"),
             "manageUsers": _has_permission(user, "can_manage_users"),
         },
@@ -206,6 +215,24 @@ class SignupPayload(BaseModel):
     email: str
     password: str
     display_name: Optional[str] = None
+
+
+class UserStatusPayload(BaseModel):
+    is_active: bool
+
+
+class StockOrderPayload(BaseModel):
+    fields: dict
+    reason: str = ""
+
+
+class StockCompletePayload(BaseModel):
+    module: str
+    fields: dict = {}
+
+
+class StockCancelPayload(BaseModel):
+    reason: str
 
 
 ASSET_FIELD_MAP = {
@@ -427,8 +454,9 @@ async def api_login(payload: LoginPayload, request: Request, db: Session = Depen
     user = db.query(User).filter(
         or_(User.email == login, User.username == payload.username.strip()),
         User.deleted_at.is_(None),
+        User.is_active.is_(True),
     ).one_or_none()
-    if user is None or not user.is_active or not verify_password(payload.password, user.password_hash):
+    if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     user.last_activity_at = utcnow()
     request.session["user_id"] = user.id
@@ -466,6 +494,85 @@ async def api_roles(request: Request, db: Session = Depends(get_db)):
             for role in roles
         ]
     }
+
+
+@app.get("/api/users")
+async def api_users(request: Request, db: Session = Depends(get_db)):
+    _require_permission(request, db, "can_manage_users")
+    users = db.query(User).filter(
+        User.deleted_at.is_(None),
+        User.email != "root@boyuanpharm.com",
+    ).order_by(User.created_at.desc()).all()
+    return {
+        "users": [
+            {
+                "id": user.id,
+                "email": user.email,
+                "displayName": user.display_name,
+                "roles": _role_names(user),
+                "status": "active" if user.is_active and user.password_hash else "pending",
+                "isActive": user.is_active,
+                "hasPassword": bool(user.password_hash),
+                "invitedAt": user.invited_at.isoformat() if user.invited_at else None,
+                "passwordSetAt": user.password_set_at.isoformat() if user.password_set_at else None,
+                "lastActivityAt": user.last_activity_at.isoformat() if user.last_activity_at else None,
+            }
+            for user in users
+        ]
+    }
+
+
+@app.post("/api/users/{user_id}/reset-password")
+async def api_reset_user_password(user_id: int, request: Request, db: Session = Depends(get_db)):
+    admin = _require_permission(request, db, "can_manage_users")
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.deleted_at.is_(None),
+        User.email != "root@boyuanpharm.com",
+    ).one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="不能重置当前登录账号的密码")
+
+    user.password_hash = None
+    user.password_set_at = None
+    user.is_active = False
+    user.invited_at = utcnow()
+    user.invited_by_user_id = admin.id
+    user.updated_at = utcnow()
+    db.commit()
+    signup_url = str(request.url_for("page_signup")) + f"?email={quote(user.email)}"
+    _log_activity(db, admin, "reset_password", "users", f"重置 {user.email} 的密码")
+    return {"ok": True, "email": user.email, "signupUrl": signup_url}
+
+
+@app.put("/api/users/{user_id}/status")
+async def api_update_user_status(
+    user_id: int,
+    payload: UserStatusPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin = _require_permission(request, db, "can_manage_users")
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.deleted_at.is_(None),
+        User.email != "root@boyuanpharm.com",
+    ).one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="不能停用当前登录账号")
+    if user.is_active == payload.is_active:
+        return {"ok": True, "isActive": user.is_active}
+
+    user.is_active = payload.is_active
+    user.updated_at = utcnow()
+    db.commit()
+    action = "启用" if payload.is_active else "停用"
+    _log_activity(db, admin, "update_user_status", "users", f"{action}用户 {user.email}")
+    return {"ok": True, "isActive": user.is_active}
 
 
 @app.post("/api/invitations")
@@ -602,6 +709,193 @@ async def api_export(request: Request, db: Session = Depends(get_db)):
     )
 
 
+def _next_stock_order_no(db: Session) -> str:
+    prefix = "BH" + datetime.utcnow().strftime("%Y%m%d")
+    latest = db.query(StockOrder).filter(StockOrder.order_no.like(prefix + "-%")).order_by(StockOrder.order_no.desc()).first()
+    number = int(latest.order_no.rsplit("-", 1)[-1]) + 1 if latest else 1
+    return f"{prefix}-{number:04d}"
+
+
+def _stock_log(db: Session, order: StockOrder, user: User, module: str, action: str,
+               label: str, old_value: str = "", new_value: str = "", reason: str = "") -> None:
+    db.add(StockOrderChangeLog(
+        order_id=order.id, order_no=order.order_no, module=module, action=action,
+        field_key=f"__{action}__", field_label=label, old_value=old_value,
+        new_value=new_value, operator_id=user.id,
+        operator_name=user.display_name or user.email, reason=reason,
+    ))
+
+
+@app.get("/api/stock-orders")
+async def api_stock_orders(request: Request, q: str = "", order_type: str = "", incomplete: str = "",
+                           date_from: str = "", date_to: str = "", db: Session = Depends(get_db)):
+    _require_permission(request, db, "can_view_stock_orders")
+    query = db.query(StockOrder).filter(StockOrder.deleted_at.is_(None))
+    if q.strip():
+        like = f"%{q.strip()}%"
+        query = query.filter(or_(StockOrder.order_no.like(like), StockOrder.customer_name.like(like),
+                                 StockOrder.salesperson.like(like), StockOrder.cas.like(like), StockOrder.internal_name.like(like)))
+    if order_type:
+        query = query.filter(StockOrder.order_type == order_type)
+    if date_from:
+        query = query.filter(StockOrder.updated_at >= datetime.fromisoformat(date_from))
+    if date_to:
+        query = query.filter(StockOrder.updated_at < datetime.fromisoformat(date_to + "T23:59:59"))
+    rows = query.order_by(StockOrder.updated_at.desc(), StockOrder.id.desc()).limit(500).all()
+    if incomplete:
+        key = incomplete.lower()
+        rows = [row for row in rows if (
+            (key in {"全部", "all"} and (not row.actual_delivery or any(not getattr(row, item[1]) for item in MODULES.values())))
+            or (key in {"采购", "purchase"} and not row.purchase_completed_at)
+            or (key in {"生产", "production"} and not row.production_completed_at)
+            or (key in {"qc", "质量"} and not row.qc_completed_at)
+            or (key in {"销售", "sales"} and not row.actual_delivery)
+        )]
+    return {"orders": [order_payload(db, row) for row in rows]}
+
+
+@app.get("/api/stock-orders/{order_id}")
+async def api_stock_order(order_id: int, request: Request, db: Session = Depends(get_db)):
+    user = _require_permission(request, db, "can_view_stock_orders")
+    order = db.query(StockOrder).filter_by(id=order_id, deleted_at=None).one_or_none()
+    if not order:
+        raise HTTPException(404, "订单不存在")
+    data = order_payload(db, order, include_locks=True)
+    data["editableModules"] = sorted({module for module in {meta[2] for meta in FIELD_META.values()} if can_edit_module(user, module)})
+    data["isAdmin"] = is_admin(user)
+    return {"order": data}
+
+
+def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order: Optional[StockOrder] = None) -> StockOrder:
+    fields = clean_fields(payload.fields)
+    if not fields:
+        raise HTTPException(400, "没有可保存的字段")
+    is_new = order is None
+    if is_new:
+        order = StockOrder(order_no=_next_stock_order_no(db), created_by_user_id=user.id, updated_by_user_id=user.id)
+        db.add(order)
+        db.flush()
+    elif order.archive_status == "已取消":
+        raise HTTPException(400, "已取消订单不能修改")
+    locks = field_locks(db, order)
+    changes = []
+    today = datetime.utcnow().date().isoformat()
+    for key, value in fields.items():
+        module = FIELD_META[key][2]
+        if not can_edit_module(user, module):
+            raise HTTPException(403, f"当前角色不能修改{FIELD_META[key][0]}字段")
+        if order.order_type == "留货订单" and module in {"purchase", "production", "qc"}:
+            raise HTTPException(400, "留货订单无需采购、生产和QC填写")
+        done_key = next((values[1] for name, values in MODULES.items() if name == module), None)
+        if done_key and getattr(order, done_key) and not is_admin(user):
+            raise HTTPException(403, f"{FIELD_META[key][0]}已完成确认")
+        old = getattr(order, key)
+        if old == value:
+            continue
+        if locks.get(key) and not is_admin(user):
+            raise HTTPException(403, f"{FIELD_META[key][1]}已跨日锁定")
+        if locks.get(key) and is_admin(user) and not payload.reason.strip():
+            raise HTTPException(400, "管理员修改跨日锁定字段必须填写修正原因")
+        setattr(order, key, value)
+        changes.append(f"{FIELD_META[key][1]}：{old or '空'} → {value or '空'}")
+        update = db.query(StockOrderFieldUpdate).filter_by(order_id=order.id, field_key=key).one_or_none()
+        if update is None:
+            update = StockOrderFieldUpdate(order_id=order.id, field_key=key)
+            db.add(update)
+        update.updated_date = today
+        update.updated_by_user_id = user.id
+    if changes:
+        order.updated_by_user_id = user.id
+        order.updated_at = utcnow()
+        _stock_log(db, order, user, "all", "create" if is_new else "save", "新建订单" if is_new else "保存更新",
+                   new_value="\n".join(changes), reason=payload.reason.strip())
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+@app.post("/api/stock-orders")
+async def api_create_stock_order(payload: StockOrderPayload, request: Request, db: Session = Depends(get_db)):
+    user = _require_permission(request, db, "can_update_stock_orders")
+    order = _save_stock_order(db, user, payload)
+    _log_activity(db, user, "create_stock_order", "stock-orders", order.order_no)
+    return {"ok": True, "order": order_payload(db, order, True)}
+
+
+@app.put("/api/stock-orders/{order_id}")
+async def api_update_stock_order(order_id: int, payload: StockOrderPayload, request: Request, db: Session = Depends(get_db)):
+    user = _require_permission(request, db, "can_update_stock_orders")
+    order = db.query(StockOrder).filter_by(id=order_id, deleted_at=None).one_or_none()
+    if not order:
+        raise HTTPException(404, "订单不存在")
+    order = _save_stock_order(db, user, payload, order)
+    _log_activity(db, user, "update_stock_order", "stock-orders", order.order_no)
+    return {"ok": True, "order": order_payload(db, order, True)}
+
+
+@app.post("/api/stock-orders/{order_id}/complete")
+async def api_complete_stock_order(order_id: int, payload: StockCompletePayload, request: Request, db: Session = Depends(get_db)):
+    user = _require_permission(request, db, "can_update_stock_orders")
+    if payload.module not in MODULES:
+        raise HTTPException(400, "完成模块无效")
+    if not can_edit_module(user, payload.module):
+        raise HTTPException(403, "当前角色不能完成该模块")
+    order = db.query(StockOrder).filter_by(id=order_id, deleted_at=None).one_or_none()
+    if not order:
+        raise HTTPException(404, "订单不存在")
+    if order.archive_status == "已取消" or order.order_type == "留货订单":
+        raise HTTPException(400, "该订单不能完成此模块")
+    due_key, done_key, skip_key, label = MODULES[payload.module]
+    if getattr(order, done_key):
+        raise HTTPException(400, "该模块已经完成")
+    module_fields = {k: v for k, v in payload.fields.items() if k in FIELD_META and FIELD_META[k][2] == payload.module}
+    if module_fields:
+        _save_stock_order(db, user, StockOrderPayload(fields=module_fields), order)
+    if not getattr(order, due_key) and not getattr(order, skip_key):
+        raise HTTPException(400, "请先填写预计日期或勾选无需处理")
+    setattr(order, done_key, utcnow())
+    order.updated_at = utcnow()
+    order.updated_by_user_id = user.id
+    _stock_log(db, order, user, payload.module, "complete", "完成确认", new_value=label)
+    db.commit()
+    _log_activity(db, user, "complete_stock_order", "stock-orders", f"{order.order_no} · {label}")
+    return {"ok": True, "order": order_payload(db, order, True)}
+
+
+@app.post("/api/stock-orders/{order_id}/cancel")
+async def api_cancel_stock_order(order_id: int, payload: StockCancelPayload, request: Request, db: Session = Depends(get_db)):
+    user = _require_permission(request, db, "can_update_stock_orders")
+    if not is_admin(user):
+        raise HTTPException(403, "只有管理员可以取消订单")
+    if not payload.reason.strip():
+        raise HTTPException(400, "请填写取消原因")
+    order = db.query(StockOrder).filter_by(id=order_id, deleted_at=None).one_or_none()
+    if not order:
+        raise HTTPException(404, "订单不存在")
+    order.archive_status = "已取消"
+    order.updated_at = utcnow()
+    _stock_log(db, order, user, "all", "cancel", "取消订单", "未归档", "已取消", payload.reason.strip())
+    db.commit()
+    _log_activity(db, user, "cancel_stock_order", "stock-orders", order.order_no)
+    return {"ok": True}
+
+
+@app.get("/api/stock-orders-history")
+async def api_stock_order_history(request: Request, order: str = "", operator: str = "", db: Session = Depends(get_db)):
+    _require_permission(request, db, "can_view_stock_orders")
+    query = db.query(StockOrderChangeLog)
+    if order:
+        query = query.filter(StockOrderChangeLog.order_no.like(f"%{order}%"))
+    if operator:
+        query = query.filter(StockOrderChangeLog.operator_name.like(f"%{operator}%"))
+    logs = query.order_by(StockOrderChangeLog.operated_at.desc()).limit(1000).all()
+    return {"logs": [{
+        "id": row.id, "orderNo": row.order_no, "module": row.module, "action": row.action,
+        "label": row.field_label, "oldValue": row.old_value, "newValue": row.new_value,
+        "operator": row.operator_name, "operatedAt": row.operated_at.isoformat(), "reason": row.reason,
+    } for row in logs]}
+
+
 @app.get("/api/asset-ledger/state")
 async def api_asset_ledger_state(request: Request, db: Session = Depends(get_db)):
     user = _require_permission(request, db, "can_view_asset_ledger")
@@ -658,6 +952,7 @@ async def page_index(request: Request, db: Session = Depends(get_db)):
         or _has_permission(user, "can_view_asset_ledger")
         or _has_permission(user, "can_manage_users")
         or _has_permission(user, "can_view_activity_logs")
+        or _has_permission(user, "can_view_stock_orders")
     ):
         raise HTTPException(status_code=403, detail="当前账号没有权限")
     return FileResponse(STATIC_DIR / "index.html", headers=_NO_STORE)

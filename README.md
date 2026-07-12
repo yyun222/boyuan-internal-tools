@@ -7,8 +7,7 @@ Internal FastAPI tools for Boyuan operations.
 ```text
 app/
   main.py              FastAPI routes and session handling
-  database.py          Database engine/session setup
-  schema.py            SQLAlchemy tables, roles, and seed data
+  db/                  Database sessions, models, and seed/bootstrap logic
   services/           Reconciliation and Excel export logic
   static/             Browser UI assets
 assets/

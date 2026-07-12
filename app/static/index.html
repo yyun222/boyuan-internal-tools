@@ -36,6 +36,11 @@
             <span class="nav-label">固定资产台账</span>
           </li>
 
+          <li class="nav-item" id="stock-orders-nav" data-view="stock-orders">
+            <span class="nav-icon">📦</span>
+            <span class="nav-label">备货订单跟进</span>
+          </li>
+
           <li class="nav-item hidden" data-view="admin" id="admin-nav">
             <span class="nav-icon">⚙</span>
             <span class="nav-label">用户管理</span>
@@ -196,6 +201,25 @@
         </section>
       </section>
 
+      <section id="view-stock-orders" class="view">
+        <div class="view-header stock-head">
+          <div><h1>备货订单跟进</h1><p class="view-desc">销售、采购、生产与质量进度统一跟进</p></div>
+          <div class="stock-actions"><button id="stock-history-btn" type="button">历史记录</button><button id="stock-new-btn" class="primary" type="button">新建订单</button></div>
+        </div>
+        <section class="card stock-filter-card">
+          <div class="stock-filters">
+            <input id="stock-q" placeholder="搜索订单号、客户、业务员、CAS、内部简称" />
+            <select id="stock-type"><option value="">全部类型</option><option>备货订单</option><option>留货订单</option></select>
+            <select id="stock-incomplete"><option value="">全部进度</option><option value="all">任一未完成</option><option value="sales">销售未完成</option><option value="purchase">采购未完成</option><option value="production">生产未完成</option><option value="qc">质量未完成</option></select>
+            <input id="stock-from" type="date" title="更新开始日期" /><input id="stock-to" type="date" title="更新结束日期" />
+            <button id="stock-search-btn" type="button">查询</button>
+          </div>
+        </section>
+        <section class="card stock-list-card">
+          <div class="table-wrap"><table class="stock-table"><thead><tr><th>订单号</th><th>类型</th><th>客户</th><th>产品/CAS</th><th>数量</th><th>销售</th><th>采购</th><th>生产</th><th>质量</th><th>实际交货</th><th>更新</th><th>操作</th></tr></thead><tbody id="stock-rows"></tbody></table></div>
+        </section>
+      </section>
+
       <section id="view-admin" class="view">
         <div class="view-header">
           <h1>用户管理</h1>
@@ -224,6 +248,15 @@
           </form>
           <div id="invite-link" class="invite-link hidden"></div>
         </section>
+
+        <section class="card admin-card">
+          <div class="card-header">
+            <h2>当前用户</h2>
+            <button type="button" id="refresh-users">刷新</button>
+          </div>
+          <div id="user-status" class="status"></div>
+          <div class="table-wrap"><table id="user-table"></table></div>
+        </section>
       </section>
 
       <section id="view-activity-logs" class="view">
@@ -246,9 +279,11 @@
           <div id="asset-modal-body"></div>
         </div>
       </div>
+      <div class="modal-mask" id="stock-modal-mask"><div class="stock-modal"><div class="stock-modal-head"><div><h3 id="stock-modal-title">订单</h3><span id="stock-modal-number"></span></div><button type="button" data-stock-close>×</button></div><div id="stock-modal-body"></div></div></div>
+      <div class="modal-mask" id="stock-history-mask"><div class="stock-modal stock-history-modal"><div class="stock-modal-head"><h3>备货订单历史</h3><button type="button" data-stock-history-close>×</button></div><div class="stock-history-filters"><input id="stock-history-order" placeholder="订单号" /><input id="stock-history-operator" placeholder="操作人" /><button id="stock-history-search" type="button">查询</button><button id="stock-history-export" type="button">导出 CSV</button></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>订单号</th><th>模块/动作</th><th>内容</th><th>操作人</th><th>原因</th></tr></thead><tbody id="stock-history-rows"></tbody></table></div></div></div>
     </main>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260711-user-status"></script>
 </body>
 </html>

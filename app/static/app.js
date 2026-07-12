@@ -25,11 +25,13 @@ fetch("/api/me", { cache: "no-store" })
     applyPermissions(d.user);
     if (d.user.permissions?.manageUsers) {
       loadRoles();
+      loadUsers();
       loadActivityLogs();
     }
     if (d.user.permissions?.viewAssetLedger) {
       initAssetLedger(d.user);
     }
+    if (d.user.permissions?.viewStockOrders) initStockOrders(d.user);
   });
 
 $("#logout-btn").addEventListener("click", async () => {
@@ -55,6 +57,7 @@ function applyPermissions(user) {
   const assetLedgerNav = $("#asset-ledger-nav");
   const adminNav = $("#admin-nav");
   const activityLogsNav = $("#activity-logs-nav");
+  const stockOrdersNav = $("#stock-orders-nav");
 
   if (!permissions.viewReconcile) {
     reconcileNav?.classList.add("hidden");
@@ -67,6 +70,7 @@ function applyPermissions(user) {
   if (!permissions.viewAssetLedger) {
     assetLedgerNav?.classList.add("hidden");
   }
+  if (!permissions.viewStockOrders) stockOrdersNav?.classList.add("hidden");
   if (!permissions.updateReconcile) {
     submitBtn.disabled = true;
     submitBtn.title = "当前账号没有对账权限";
@@ -191,6 +195,7 @@ document.querySelectorAll(".nav-item[data-view]").forEach((item) => {
     $(`#view-${item.dataset.view}`)?.classList.add("active");
     if (item.dataset.view === "activity-logs") loadActivityLogs();
     if (item.dataset.view === "asset-ledger") renderAssetLedgerAll();
+    if (item.dataset.view === "stock-orders") loadStockOrders();
   });
 });
 
@@ -232,6 +237,99 @@ async function loadActivityLogs() {
   `;
 }
 
+function formatDateTime(value) {
+  return value ? value.replace("T", " ").slice(0, 19) : "—";
+}
+
+async function loadUsers() {
+  const table = $("#user-table");
+  if (!table) return;
+  const status = $("#user-status");
+  table.innerHTML = '<tbody><tr><td class="empty">正在加载用户…</td></tr></tbody>';
+  status.textContent = "";
+  status.className = "status";
+  try {
+    const resp = await fetch("/api/users", { cache: "no-store" });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || `用户加载失败 (HTTP ${resp.status})`);
+    if (!Array.isArray(data.users)) throw new Error("用户数据格式无效");
+    if (!data.users.length) {
+      table.innerHTML = '<tbody><tr><td class="empty">暂无用户</td></tr></tbody>';
+      return;
+    }
+    table.innerHTML = `
+      <thead><tr><th>用户</th><th>角色</th><th>状态</th><th>邀请时间</th><th>密码设置时间</th><th>最近活动</th><th>操作</th></tr></thead>
+      <tbody>${data.users.map((user) => `
+        <tr>
+          <td>${escapeHtml(user.displayName || "")}<br><span class="muted">${escapeHtml(user.email)}</span></td>
+          <td>${escapeHtml(user.roles.join("、") || "—")}</td>
+          <td><span class="user-state ${user.isActive ? user.status : "inactive"}">${user.isActive ? (user.status === "active" ? "正常" : "待设置密码") : "已停用"}</span></td>
+          <td>${formatDateTime(user.invitedAt)}</td>
+          <td>${formatDateTime(user.passwordSetAt)}</td>
+          <td>${formatDateTime(user.lastActivityAt)}</td>
+          <td><div class="user-row-actions"><button type="button" class="user-status-btn ${user.isActive ? "deactivate" : "activate"}" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}" data-user-active="${user.isActive}">${user.isActive ? "停用" : "启用"}</button><button type="button" class="user-reset-btn" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}">重置密码</button></div></td>
+        </tr>
+      `).join("")}</tbody>
+    `;
+  } catch (err) {
+    const message = err.message || String(err);
+    table.innerHTML = `<tbody><tr><td class="empty">${escapeHtml(message)}</td></tr></tbody>`;
+    status.textContent = message;
+    status.className = "status error";
+  }
+}
+
+$("#refresh-users")?.addEventListener("click", loadUsers);
+$("#user-table")?.addEventListener("click", async (event) => {
+  const statusBtn = event.target.closest(".user-status-btn");
+  if (statusBtn) {
+    const isActive = statusBtn.dataset.userActive === "true";
+    const action = isActive ? "停用" : "启用";
+    if (!window.confirm(`确定${action} ${statusBtn.dataset.userEmail} 吗？${isActive ? "停用后该用户将无法登录。" : ""}`)) return;
+    const status = $("#user-status");
+    statusBtn.disabled = true;
+    status.textContent = `正在${action}…`;
+    status.className = "status";
+    try {
+      const resp = await fetch(`/api/users/${statusBtn.dataset.userId}/status`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: !isActive }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.detail || `${action}失败`);
+      await Promise.all([loadUsers(), loadActivityLogs()]);
+      status.textContent = `用户已${action}`;
+      status.className = "status success";
+    } catch (err) {
+      status.textContent = err.message || String(err);
+      status.className = "status error";
+      statusBtn.disabled = false;
+    }
+    return;
+  }
+  const btn = event.target.closest(".user-reset-btn");
+  if (!btn) return;
+  const email = btn.dataset.userEmail;
+  if (!window.confirm(`确定重置 ${email} 的密码吗？该用户会立即退出登录。`)) return;
+  const status = $("#user-status");
+  btn.disabled = true;
+  status.textContent = "正在重置…";
+  status.className = "status";
+  try {
+    const resp = await fetch(`/api/users/${btn.dataset.userId}/reset-password`, { method: "POST" });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || "重置失败");
+    status.textContent = `密码已重置。新密码设置链接：${data.signupUrl}`;
+    status.className = "status success";
+    await Promise.all([loadUsers(), loadActivityLogs()]);
+  } catch (err) {
+    status.textContent = err.message || String(err);
+    status.className = "status error";
+    btn.disabled = false;
+  }
+});
+
 $("#refresh-logs")?.addEventListener("click", loadActivityLogs);
 
 $("#invite-form")?.addEventListener("submit", async (e) => {
@@ -259,7 +357,7 @@ $("#invite-form")?.addEventListener("submit", async (e) => {
     status.className = "status success";
     linkBox.textContent = data.signupUrl;
     linkBox.classList.remove("hidden");
-    await loadActivityLogs();
+    await Promise.all([loadUsers(), loadActivityLogs()]);
   } catch (err) {
     status.textContent = err.message || String(err);
     status.className = "status error";
@@ -755,4 +853,140 @@ function downloadAssetCsv(name, rows) {
   link.download = name;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+// --- Stock order tracking ---
+let stockUser = null;
+let stockCurrent = null;
+let stockHistory = [];
+const STOCK_GROUPS = [
+  ["基础与销售", "sales", [["internal_name","内部简称"],["cas","CAS"],["quantity","数量"],["order_type","订单类型","select"],["salesperson","业务员"],["demand_date","提需求日期","date"],["customer_name","客户名称"],["order_situation","订单情况","textarea"],["quality_requirement","质量要求","textarea"],["delivery_requirement","交货期需求","date"],["sales_note","其他说明","textarea"],["sales_owner","销售负责人"],["actual_delivery","实际交货","date"]]],
+  ["采购部", "purchase", [["purchase_not_required","无需采购","checkbox"],["purchase_material","需采购原料","textarea"],["purchase_quantity","采购数量"],["purchase_items","采购原料明细","textarea"],["purchase_date","采购日期","date"],["arrival_date","预计到货时间","date"],["purchase_note","采购说明","textarea"],["purchase_owner","采购负责人"]]],
+  ["生产部", "production", [["production_not_required","无需生产","checkbox"],["production_form_date","填表日期","date"],["production_status","评估当前状态","textarea"],["expected_delivery_date","预计完成时间","date"],["production_note","生产说明","textarea"]]],
+  ["质量部", "qc", [["qc_not_required","无需检测","checkbox"],["coa_time","预计完成时间","date"],["qc_note","QC备注","textarea"],["qc_owner","QC负责人"]]],
+];
+
+function initStockOrders(user) {
+  stockUser = user;
+  $("#stock-new-btn")?.addEventListener("click", () => openStockOrder());
+  $("#stock-search-btn")?.addEventListener("click", loadStockOrders);
+  $("#stock-history-btn")?.addEventListener("click", openStockHistory);
+  $("#stock-history-search")?.addEventListener("click", loadStockHistory);
+  $("#stock-history-export")?.addEventListener("click", exportStockHistory);
+  document.querySelector("[data-stock-close]")?.addEventListener("click", closeStockOrder);
+  document.querySelector("[data-stock-history-close]")?.addEventListener("click", () => $("#stock-history-mask").classList.remove("active"));
+  if (!user.permissions?.updateStockOrders) $("#stock-new-btn").disabled = true;
+  loadStockOrders();
+}
+
+async function stockApi(url, options = {}) {
+  const resp = await fetch(url, {headers:{"Content-Type":"application/json", ...(options.headers || {})}, ...options});
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.detail || `请求失败 (${resp.status})`);
+  return data;
+}
+
+async function loadStockOrders() {
+  if (!stockUser) return;
+  const params = new URLSearchParams({q:$("#stock-q").value, order_type:$("#stock-type").value, incomplete:$("#stock-incomplete").value, date_from:$("#stock-from").value, date_to:$("#stock-to").value});
+  const body = $("#stock-rows");
+  body.innerHTML = '<tr><td colspan="12" class="empty">正在加载…</td></tr>';
+  try {
+    const data = await stockApi("/api/stock-orders?" + params);
+    body.innerHTML = data.orders.length ? data.orders.map(stockRow).join("") : '<tr><td colspan="12" class="empty">暂无订单</td></tr>';
+  } catch (err) { body.innerHTML = `<tr><td colspan="12" class="empty">${escapeHtml(err.message)}</td></tr>`; }
+}
+
+function stockState(order, module) {
+  if (order.archive_status === "已取消") return '<span class="stock-state cancelled">已取消</span>';
+  if (order.order_type === "留货订单" && module !== "sales") return '<span class="stock-state muted-state">无需处理</span>';
+  if (module === "sales") return order.actual_delivery ? '<span class="stock-state done">已交货</span>' : '<span class="stock-state pending">待交货</span>';
+  const key = `${module}_completed_at`;
+  if (order[key]) return `<span class="stock-state done">已完成</span>`;
+  if (order.overdue?.[module]) return `<span class="stock-state late">${escapeHtml(order.overdue[module])}</span>`;
+  return '<span class="stock-state pending">进行中</span>';
+}
+
+function stockRow(order) {
+  return `<tr><td><strong>${escapeHtml(order.order_no)}</strong></td><td>${escapeHtml(order.order_type)}</td><td>${escapeHtml(order.customer_name || "—")}</td><td>${escapeHtml(order.internal_name || "—")}<br><span class="muted">${escapeHtml(order.cas || "")}</span></td><td>${escapeHtml(order.quantity || "—")}</td><td>${stockState(order,"sales")}</td><td>${stockState(order,"purchase")}</td><td>${stockState(order,"production")}</td><td>${stockState(order,"qc")}</td><td>${escapeHtml(order.actual_delivery || "—")}</td><td>${escapeHtml((order.updated_at || "").replace("T"," ").slice(0,16))}</td><td><button class="stock-open-btn" onclick="openStockOrder(${order.id})">查看</button></td></tr>`;
+}
+
+async function openStockOrder(id = null) {
+  try {
+    stockCurrent = id ? (await stockApi(`/api/stock-orders/${id}`)).order : {order_type:"备货订单", locks:{}, editableModules:["sales","purchase","production","qc"], isAdmin:stockUser.roles?.includes("admin")};
+    $("#stock-modal-title").textContent = id ? "订单详情" : "新建订单";
+    $("#stock-modal-number").textContent = stockCurrent.order_no || "保存后自动生成订单号";
+    $("#stock-modal-body").innerHTML = renderStockForm();
+    $("#stock-modal-mask").classList.add("active");
+    $("#stock-order-form").addEventListener("submit", saveStockOrder);
+    document.querySelectorAll("[data-stock-complete]").forEach(btn => btn.addEventListener("click", () => completeStockModule(btn.dataset.stockComplete)));
+    $("#stock-cancel-btn")?.addEventListener("click", cancelStockOrder);
+  } catch (err) { alert(err.message); }
+}
+window.openStockOrder = openStockOrder;
+
+function renderStockField([key,label,type]) {
+  const value = stockCurrent[key] ?? "";
+  const module = STOCK_GROUPS.find(group => group[2].some(field => field[0] === key))?.[1] || "sales";
+  const locked = stockCurrent.locks?.[key];
+  const disabled = !stockUser.permissions?.updateStockOrders || !stockCurrent.editableModules.includes(module) || (locked && !stockCurrent.isAdmin) || stockCurrent.archive_status === "已取消";
+  if (type === "checkbox") return `<label class="stock-check"><input name="${key}" type="checkbox" ${value ? "checked" : ""} ${disabled ? "disabled" : ""}>${label}${locked ? ' <em>已锁定</em>' : ''}</label>`;
+  if (type === "select") return `<label><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><select name="${key}" ${disabled ? "disabled" : ""}><option ${value === "备货订单" ? "selected" : ""}>备货订单</option><option ${value === "留货订单" ? "selected" : ""}>留货订单</option></select></label>`;
+  if (type === "textarea") return `<label class="wide"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><textarea name="${key}" ${disabled ? "disabled" : ""}>${escapeHtml(value)}</textarea></label>`;
+  return `<label><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><input name="${key}" type="${type || "text"}" value="${escapeHtml(value)}" ${disabled ? "disabled" : ""}></label>`;
+}
+
+function renderStockForm() {
+  const hold = stockCurrent.order_type === "留货订单";
+  const cancelled = stockCurrent.archive_status === "已取消";
+  return `<form id="stock-order-form"><div class="stock-modules">${STOCK_GROUPS.map(([title,module,fields]) => {
+    const done = stockCurrent[`${module}_completed_at`];
+    const canComplete = module !== "sales" && stockCurrent.id && !hold && !cancelled && stockCurrent.editableModules.includes(module) && !done;
+    return `<section class="stock-module"><div class="stock-module-head"><h4>${title}</h4>${module !== "sales" ? (done ? `<span class="stock-state done">完成于 ${escapeHtml(done.slice(0,16).replace("T"," "))}</span>` : (canComplete ? `<button type="button" data-stock-complete="${module}">完成确认</button>` : "")) : ""}</div><div class="stock-form-grid">${fields.map(renderStockField).join("")}</div></section>`;
+  }).join("")}</div>${stockCurrent.isAdmin ? '<label class="stock-reason"><span>管理员修正原因（修改跨日锁定字段时必填）</span><input name="reason"></label>' : ''}<div class="stock-form-footer">${stockCurrent.isAdmin && stockCurrent.id && !cancelled ? '<button id="stock-cancel-btn" class="danger" type="button">取消订单</button>' : '<span></span>'}<div><button type="button" data-stock-close onclick="closeStockOrder()">关闭</button>${!cancelled && stockUser.permissions?.updateStockOrders ? '<button class="primary" type="submit">保存</button>' : ''}</div></div></form>`;
+}
+
+function collectStockFields(form) {
+  const fields = {};
+  STOCK_GROUPS.flatMap(group => group[2]).forEach(([key,,type]) => {
+    const input = form.elements[key];
+    if (!input || input.disabled) return;
+    fields[key] = type === "checkbox" ? input.checked : input.value;
+  });
+  return fields;
+}
+
+async function saveStockOrder(event) {
+  event.preventDefault();
+  const form = event.target;
+  try {
+    const data = await stockApi(stockCurrent.id ? `/api/stock-orders/${stockCurrent.id}` : "/api/stock-orders", {method:stockCurrent.id ? "PUT" : "POST", body:JSON.stringify({fields:collectStockFields(form), reason:form.elements.reason?.value || ""})});
+    await loadStockOrders(); await openStockOrder(data.order.id);
+  } catch (err) { alert(err.message); }
+}
+
+async function completeStockModule(module) {
+  const form = $("#stock-order-form");
+  try { await stockApi(`/api/stock-orders/${stockCurrent.id}/complete`, {method:"POST", body:JSON.stringify({module, fields:collectStockFields(form)})}); await loadStockOrders(); await openStockOrder(stockCurrent.id); }
+  catch (err) { alert(err.message); }
+}
+
+async function cancelStockOrder() {
+  const reason = prompt("请输入取消原因：");
+  if (!reason) return;
+  try { await stockApi(`/api/stock-orders/${stockCurrent.id}/cancel`, {method:"POST", body:JSON.stringify({reason})}); closeStockOrder(); await loadStockOrders(); }
+  catch (err) { alert(err.message); }
+}
+
+function closeStockOrder() { $("#stock-modal-mask").classList.remove("active"); }
+window.closeStockOrder = closeStockOrder;
+
+async function openStockHistory() { $("#stock-history-mask").classList.add("active"); await loadStockHistory(); }
+async function loadStockHistory() {
+  const params = new URLSearchParams({order:$("#stock-history-order").value, operator:$("#stock-history-operator").value});
+  try { const data = await stockApi("/api/stock-orders-history?" + params); stockHistory = data.logs; $("#stock-history-rows").innerHTML = stockHistory.length ? stockHistory.map(log => `<tr><td>${escapeHtml(log.operatedAt.replace("T"," ").slice(0,19))}</td><td>${escapeHtml(log.orderNo)}</td><td>${escapeHtml(log.module)} / ${escapeHtml(log.label)}</td><td class="stock-log-detail">${escapeHtml(log.newValue)}</td><td>${escapeHtml(log.operator)}</td><td>${escapeHtml(log.reason || "—")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">暂无记录</td></tr>'; } catch(err) { alert(err.message); }
+}
+function exportStockHistory() {
+  const rows = [["时间","订单号","模块","动作","内容","操作人","原因"], ...stockHistory.map(log => [log.operatedAt,log.orderNo,log.module,log.label,log.newValue,log.operator,log.reason])];
+  downloadAssetCsv("备货订单历史.csv", rows);
 }

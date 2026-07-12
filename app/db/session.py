@@ -1,4 +1,4 @@
-"""Database connection setup."""
+"""Database engine and session setup."""
 
 from __future__ import annotations
 
@@ -14,14 +14,14 @@ DATABASE_URL = os.environ.get("BOYUAN_DATABASE_URL", DEFAULT_DATABASE_URL)
 
 def _create_database_if_needed(database_url: str) -> None:
     url = make_url(database_url)
-    if not url.database:
+    if not url.database or not url.drivername.startswith("mysql"):
         return
     server_url = url.set(database=None)
-    engine = create_engine(server_url, future=True, pool_pre_ping=True)
+    server_engine = create_engine(server_url, future=True, pool_pre_ping=True)
     db_name = url.database.replace("`", "``")
-    with engine.begin() as conn:
+    with server_engine.begin() as conn:
         conn.execute(text(f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
-    engine.dispose()
+    server_engine.dispose()
 
 
 def _make_engine():

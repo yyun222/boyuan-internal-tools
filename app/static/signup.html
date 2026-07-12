@@ -24,6 +24,10 @@
         <span>密码</span>
         <input type="password" id="password" autocomplete="new-password" minlength="8" required />
       </label>
+      <label>
+        <span>再次输入密码</span>
+        <input type="password" id="password-confirm" autocomplete="new-password" minlength="8" required />
+      </label>
       <button type="submit" id="signup-btn">设置密码</button>
       <div id="signup-error" class="login-error"></div>
       <a class="login-link" href="/login">返回登录</a>
@@ -37,9 +41,25 @@
     const form = document.getElementById("signup-form");
     const errEl = document.getElementById("signup-error");
     const btn = document.getElementById("signup-btn");
+    const passwordEl = document.getElementById("password");
+    const passwordConfirmEl = document.getElementById("password-confirm");
+
+    const validatePasswords = () => {
+      const mismatch = passwordConfirmEl.value && passwordEl.value !== passwordConfirmEl.value;
+      passwordConfirmEl.setCustomValidity(mismatch ? "两次输入的密码不一致" : "");
+      errEl.textContent = mismatch ? "两次输入的密码不一致，请重新输入。" : "";
+      return !mismatch;
+    };
+    passwordEl.addEventListener("input", validatePasswords);
+    passwordConfirmEl.addEventListener("input", validatePasswords);
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       errEl.textContent = "";
+      if (!validatePasswords()) {
+        passwordConfirmEl.focus();
+        return;
+      }
       btn.disabled = true;
       try {
         const resp = await fetch("/api/signup", {
@@ -47,7 +67,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             email: document.getElementById("email").value,
-            password: document.getElementById("password").value,
+            password: passwordEl.value,
             display_name: document.getElementById("display-name").value,
           }),
         });
