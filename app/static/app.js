@@ -208,18 +208,28 @@ document.querySelectorAll(".nav-item[data-view]").forEach((item) => {
   });
 });
 
+let managedRoles = [];
+let managedUsers = [];
+
+function renderRoleOptions(roles, selected = []) {
+  const selectedNames = new Set(selected);
+  return roles.map((role) => `
+    <label class="role-option">
+      <input type="checkbox" value="${escapeHtml(role.name)}" ${selectedNames.has(role.name) ? "checked" : ""} />
+      <span>${escapeHtml(role.displayName)}${role.department ? ` · ${escapeHtml(role.department)}` : ""}</span>
+    </label>
+  `).join("");
+}
+
 async function loadRoles() {
   const target = $("#role-options");
   if (!target) return;
   const resp = await fetch("/api/roles", { cache: "no-store" });
   if (!resp.ok) return;
   const data = await resp.json();
-  target.innerHTML = data.roles.map((role) => `
-    <label class="role-option">
-      <input type="checkbox" value="${escapeHtml(role.name)}" />
-      <span>${escapeHtml(role.displayName)}${role.department ? ` · ${escapeHtml(role.department)}` : ""}</span>
-    </label>
-  `).join("");
+  managedRoles = data.roles || [];
+  target.innerHTML = renderRoleOptions(managedRoles);
+  return managedRoles;
 }
 
 async function loadActivityLogs() {
@@ -262,6 +272,7 @@ async function loadUsers() {
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.detail || `用户加载失败 (HTTP ${resp.status})`);
     if (!Array.isArray(data.users)) throw new Error("用户数据格式无效");
+    managedUsers = data.users;
     if (!data.users.length) {
       table.innerHTML = '<tbody><tr><td class="empty">暂无用户</td></tr></tbody>';
       return;
@@ -276,7 +287,7 @@ async function loadUsers() {
           <td>${formatDateTime(user.invitedAt)}</td>
           <td>${formatDateTime(user.passwordSetAt)}</td>
           <td>${formatDateTime(user.lastActivityAt)}</td>
-          <td><div class="user-row-actions"><button type="button" class="user-status-btn ${user.isActive ? "deactivate" : "activate"}" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}" data-user-active="${user.isActive}">${user.isActive ? "停用" : "启用"}</button><button type="button" class="user-reset-btn" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}">重置密码</button></div></td>
+          <td><div class="user-row-actions"><button type="button" class="user-permission-btn" data-user-id="${user.id}">更新权限</button><button type="button" class="user-status-btn ${user.isActive ? "deactivate" : "activate"}" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}" data-user-active="${user.isActive}">${user.isActive ? "停用" : "启用"}</button><button type="button" class="user-reset-btn" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}">重置密码</button></div></td>
         </tr>
       `).join("")}</tbody>
     `;
@@ -290,6 +301,11 @@ async function loadUsers() {
 
 $("#refresh-users")?.addEventListener("click", loadUsers);
 $("#user-table")?.addEventListener("click", async (event) => {
+  const permissionBtn = event.target.closest(".user-permission-btn");
+  if (permissionBtn) {
+    await openUserPermissionEditor(Number(permissionBtn.dataset.userId));
+    return;
+  }
   const statusBtn = event.target.closest(".user-status-btn");
   if (statusBtn) {
     const isActive = statusBtn.dataset.userActive === "true";
@@ -336,6 +352,58 @@ $("#user-table")?.addEventListener("click", async (event) => {
     status.textContent = err.message || String(err);
     status.className = "status error";
     btn.disabled = false;
+  }
+});
+
+async function openUserPermissionEditor(userId) {
+  const user = managedUsers.find((item) => item.id === userId);
+  if (!user) return;
+  if (!managedRoles.length) await loadRoles();
+  $("#user-permission-title").textContent = `更新权限 · ${user.displayName || user.email}`;
+  $("#user-permission-id").value = String(user.id);
+  $("#user-permission-options").innerHTML = renderRoleOptions(managedRoles, user.roles || []);
+  $("#user-permission-status").textContent = "";
+  $("#user-permission-mask").classList.add("active");
+}
+
+function closeUserPermissionEditor() {
+  $("#user-permission-mask").classList.remove("active");
+}
+
+document.querySelectorAll("[data-user-permission-close]").forEach((button) => button.addEventListener("click", closeUserPermissionEditor));
+$("#user-permission-mask")?.addEventListener("click", (event) => {
+  if (event.target.id === "user-permission-mask") closeUserPermissionEditor();
+});
+$("#user-permission-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const userId = Number($("#user-permission-id").value);
+  const roles = [...document.querySelectorAll("#user-permission-options input:checked")].map((input) => input.value);
+  const status = $("#user-permission-status");
+  const submit = $("#user-permission-submit");
+  submit.disabled = true;
+  status.textContent = "正在保存…";
+  status.className = "status";
+  try {
+    const resp = await fetch(`/api/users/${userId}/roles`, {
+      method: "PUT",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({roles}),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || "权限更新失败");
+    await Promise.all([loadUsers(), loadActivityLogs()]);
+    closeUserPermissionEditor();
+    $("#user-status").textContent = "用户权限已更新";
+    $("#user-status").className = "status success";
+    if (currentUser?.id === userId) {
+      sessionStorage.removeItem("boyuan_current_user");
+      window.location.reload();
+    }
+  } catch (err) {
+    status.textContent = err.message || String(err);
+    status.className = "status error";
+  } finally {
+    submit.disabled = false;
   }
 });
 
@@ -493,8 +561,7 @@ function escapeHtml(s) {
 const assetSites = ["济阳厂区", "禹城厂区", "银丰研发中心", "公司办公/其他"];
 const assetFallbackDepartments = [
   "工程部", "行政后勤", "仓储部", "销售部", "生产部", "质量部", "EHS",
-  "济阳厂区", "采购部", "建筑路墙", "202", "公共区", "动力车间", "201",
-  "203", "204", "302", "303", "301", "206", "305", "306"
+  "济阳厂区", "采购部", "建筑路墙", "公共区", "动力车间",
 ];
 const assetDepartments = assetFallbackDepartments;
 const assetStatuses = ["在用", "待安装", "安装中", "维修中", "闲置", "拆解待处理", "报废待处置", "已报废"];

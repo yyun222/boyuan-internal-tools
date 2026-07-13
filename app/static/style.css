@@ -600,6 +600,8 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
 .user-state.pending { color: #9c6500; background: #fff4d6; }
 .user-state.inactive { color: #c9342b; background: #fff1f0; }
 .user-reset-btn { white-space: nowrap; padding: 7px 10px; font-size: 12px; }
+.user-permission-btn { white-space: nowrap; padding: 7px 10px; font-size: 12px; color: #2457a6; border-color: #9bb7df; background: #fff; }
+.user-permission-btn:hover:not(:disabled) { color: #fff; background: #2457a6; border-color: #2457a6; }
 .user-row-actions { display: flex; gap: 6px; white-space: nowrap; }
 .user-status-btn { white-space: nowrap; padding: 7px 10px; border: 1px solid; font-size: 12px; }
 .user-status-btn.activate { color: #087f5b; border-color: #83ccb4; }
@@ -657,6 +659,9 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
   word-break: break-all;
   font-size: 13px;
 }
+.user-permission-modal { width: min(720px, 100%); }
+.user-permission-body { padding: 16px; }
+.user-permission-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px 16px; }
 
 .asset-ledger-head {
   display: flex;

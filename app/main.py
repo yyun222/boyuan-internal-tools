@@ -230,6 +230,10 @@ class UserStatusPayload(BaseModel):
     is_active: bool
 
 
+class UserRolesPayload(BaseModel):
+    roles: list[str]
+
+
 class StockOrderPayload(BaseModel):
     fields: dict[str, object]
     reason: str = ""
@@ -511,7 +515,7 @@ async def api_users(request: Request, db: Session = Depends(get_db)):
     _require_permission(request, db, "can_manage_users")
     users = db.query(User).filter(
         User.deleted_at.is_(None),
-        User.email != "root@boyuanpharm.com",
+        User.email != settings.initial_admin_email,
     ).order_by(User.created_at.desc()).all()
     return {
         "users": [
@@ -539,7 +543,7 @@ async def api_reset_user_password(user_id: int, request: Request, db: Session = 
     user = db.query(User).filter(
         User.id == user_id,
         User.deleted_at.is_(None),
-        User.email != "root@boyuanpharm.com",
+        User.email != settings.initial_admin_email,
     ).one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
@@ -569,7 +573,7 @@ async def api_update_user_status(
     user = db.query(User).filter(
         User.id == user_id,
         User.deleted_at.is_(None),
-        User.email != "root@boyuanpharm.com",
+        User.email != settings.initial_admin_email,
     ).one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
@@ -584,6 +588,44 @@ async def api_update_user_status(
     action = "启用" if payload.is_active else "停用"
     _log_activity(db, admin, "update_user_status", "users", f"{action}用户 {user.email}")
     return {"ok": True, "isActive": user.is_active}
+
+
+@app.put("/api/users/{user_id}/roles")
+async def api_update_user_roles(
+    user_id: int,
+    payload: UserRolesPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin = _require_permission(request, db, "can_manage_users")
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.deleted_at.is_(None),
+        User.email != settings.initial_admin_email,
+    ).one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    role_names = list(dict.fromkeys(payload.roles))
+    if not role_names:
+        raise HTTPException(status_code=400, detail="请至少选择一个角色")
+    roles = db.query(Role).filter(Role.name.in_(role_names), Role.deleted_at.is_(None)).all()
+    if len(roles) != len(role_names):
+        raise HTTPException(status_code=400, detail="包含无效角色")
+    if user.id == admin.id and not any(role.can_manage_users for role in roles):
+        raise HTTPException(status_code=400, detail="不能移除当前登录账号的用户管理权限")
+    old_role_names = sorted(_role_names(user))
+    old_names = sorted(_role_display_names(user))
+    new_role_names = sorted(role.name for role in roles)
+    new_names = sorted(role.display_name for role in roles)
+    if old_role_names == new_role_names:
+        return {"ok": True, "roles": _role_names(user), "roleDisplayNames": old_names}
+    user.roles = roles
+    user.updated_at = utcnow()
+    _log_activity(
+        db, admin, "update_user_roles", "users",
+        f"更新 {user.email} 权限：{'、'.join(old_names) or '无'} → {'、'.join(new_names)}",
+    )
+    return {"ok": True, "roles": new_role_names, "roleDisplayNames": new_names}
 
 
 @app.post("/api/invitations")

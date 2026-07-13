@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Boyuan Internal Tools</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260713-stock-orders" />
+  <link rel="stylesheet" href="/static/style.css?v=20260714-user-permissions" />
 </head>
 <body>
   <header class="topbar">
@@ -279,11 +279,28 @@
           <div id="asset-modal-body"></div>
         </div>
       </div>
+      <div class="modal-mask" id="user-permission-mask">
+        <div class="asset-modal user-permission-modal">
+          <h3 id="user-permission-title">更新权限</h3>
+          <form id="user-permission-form">
+            <input id="user-permission-id" type="hidden" />
+            <div class="user-permission-body">
+              <span class="admin-label">角色（至少选择一个）</span>
+              <div id="user-permission-options" class="role-options"></div>
+              <div id="user-permission-status" class="status"></div>
+            </div>
+            <div class="user-permission-footer">
+              <button type="button" data-user-permission-close>取消</button>
+              <button id="user-permission-submit" class="primary" type="submit">保存权限</button>
+            </div>
+          </form>
+        </div>
+      </div>
       <div class="modal-mask" id="stock-modal-mask"><div class="stock-modal"><div class="stock-modal-head"><div><h3 id="stock-modal-title">订单</h3><span id="stock-modal-number"></span></div><button type="button" data-stock-close>×</button></div><div id="stock-modal-body"></div></div></div>
       <div class="modal-mask" id="stock-history-mask"><div class="stock-modal stock-history-modal"><div class="stock-modal-head"><h3>备货订单历史</h3><button type="button" data-stock-history-close>×</button></div><div class="stock-history-filters"><input id="stock-history-order" placeholder="订单号" /><input id="stock-history-operator" placeholder="操作人" /><input id="stock-history-month" type="month" title="订单创建月份" /><button id="stock-history-search" type="button">查询</button><button id="stock-orders-export" type="button">导出 CSV</button><button id="stock-performance-export" type="button">导出绩效 CSV</button><button id="stock-history-export" type="button">导出修改记录</button></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>订单号</th><th>模块/动作</th><th>内容</th><th>操作人</th><th>原因</th></tr></thead><tbody id="stock-history-rows"></tbody></table></div></div></div>
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260713-stock-orders"></script>
+  <script src="/static/app.js?v=20260714-user-permissions"></script>
 </body>
 </html>
