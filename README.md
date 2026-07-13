@@ -47,7 +47,7 @@ BOYUAN_INITIAL_ADMIN_EMAIL=root@boyuanpharm.com
 BOYUAN_INITIAL_ADMIN_PASSWORD=<strong-initial-password>
 ```
 
-The insecure database and administrator defaults are intended for local development only.
+`BOYUAN_ROOT_PASSWORD` remains supported as a backward-compatible alias for the initial administrator password. The insecure database and administrator defaults are intended for local development only.
 
 ## Tests
 

@@ -25,7 +25,10 @@ class Settings:
     session_cookie_secure: bool = _env_bool("BOYUAN_SESSION_COOKIE_SECURE", False)
     business_utc_offset_hours: int = int(os.environ.get("BOYUAN_BUSINESS_UTC_OFFSET", "8"))
     initial_admin_email: str = os.environ.get("BOYUAN_INITIAL_ADMIN_EMAIL", "root@boyuanpharm.com")
-    initial_admin_password: str = os.environ.get("BOYUAN_INITIAL_ADMIN_PASSWORD", "123123")
+    initial_admin_password: str = os.environ.get(
+        "BOYUAN_INITIAL_ADMIN_PASSWORD",
+        os.environ.get("BOYUAN_ROOT_PASSWORD", "123123"),
+    )
 
 
 settings = Settings()
