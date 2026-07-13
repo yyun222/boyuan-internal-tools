@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>登录 · Boyuan Internal Tools</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=20260713-stock-orders" />
 </head>
 <body class="login-body">
   <div class="login-card">
@@ -43,10 +43,12 @@
             password: document.getElementById("password").value,
           }),
         });
+        const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
-          const err = await resp.json().catch(() => ({}));
+          const err = data;
           throw new Error(err.detail || "登录失败");
         }
+        sessionStorage.setItem("boyuan_current_user", JSON.stringify(data.user));
         window.location.href = "/";
       } catch (err) {
         errEl.textContent = err.message || String(err);

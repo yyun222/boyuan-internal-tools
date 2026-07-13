@@ -65,6 +65,14 @@ def _ensure_legacy_columns(engine) -> None:
             "roles": {"updated_at": "DATETIME NULL", "deleted_at": "DATETIME NULL", "can_view_stock_orders": "BOOLEAN NOT NULL DEFAULT TRUE", "can_update_stock_orders": "BOOLEAN NOT NULL DEFAULT TRUE"},
             "activity_logs": {"created_at": "DATETIME NULL", "updated_at": "DATETIME NULL", "deleted_at": "DATETIME NULL"},
             "user_roles": {"created_at": "DATETIME NULL", "updated_at": "DATETIME NULL", "deleted_at": "DATETIME NULL"},
+            "stock_orders": {
+                "sales_completed_at": "DATETIME NULL",
+                "purchase_responded_at": "DATETIME NULL",
+                "production_responded_at": "DATETIME NULL",
+                "qc_responded_at": "DATETIME NULL",
+                "cancelled_at": "DATETIME NULL",
+                "cancelled_reason": "TEXT NOT NULL",
+            },
         }
         for table_name, definitions in columns.items():
             for column_name, definition in definitions.items():
@@ -79,7 +87,7 @@ def init_database(engine, session_factory) -> None:
         _upsert_role(db, "finance", "财务", scope="all", department=None, can_view_reconcile=True, can_update_reconcile=True, can_view_asset_ledger=True, can_update_asset_ledger=True)
         _upsert_role(db, "inventory", "盘点", scope="all", department=None, can_view_asset_ledger=True, can_update_asset_ledger=True)
         for role_name, display_name, department in DEPARTMENT_ROLES:
-            _upsert_role(db, role_name, f"{display_name}部门", scope="department", department=department, can_view_asset_ledger=True, can_update_asset_ledger=True)
+            _upsert_role(db, role_name, display_name, scope="department", department=department, can_view_asset_ledger=True, can_update_asset_ledger=True)
         for role in db.query(Role).filter(Role.deleted_at.is_(None)).all():
             role.can_view_stock_orders = True
             role.can_update_stock_orders = True

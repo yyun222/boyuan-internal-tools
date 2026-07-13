@@ -899,6 +899,13 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
   width:100%; border:1px solid #d2d2d7; border-radius:8px; padding:9px 10px; background:#fff; color:#1d1d1f; font:inherit; box-sizing:border-box;
 }
 .stock-form-grid textarea { resize:vertical; min-height:68px; }.stock-form-grid input:disabled, .stock-form-grid textarea:disabled, .stock-form-grid select:disabled { background:#f3f3f5; color:#777; }
+.stock-view-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.stock-view-field { display:flex; min-height:64px; border:1px solid #e5e5ea; border-radius:8px; overflow:hidden; }
+.stock-view-field strong { flex:0 0 110px; padding:10px; background:#f5f5f7; color:#515154; }
+.stock-view-field span { padding:10px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.stock-purchase-items { grid-column:span 3; }
+.stock-purchase-row { display:grid; grid-template-columns:2fr 1fr auto; gap:8px; margin:7px 0; }
+.stock-cancelled-row { background:#fff5f5; color:#777; }
 .stock-form-grid em { color:#9c6500; font-style:normal; font-size:11px; }.stock-reason { margin-top:14px; }
 .stock-form-footer { display:flex; justify-content:space-between; gap:10px; margin-top:16px; }.stock-form-footer > div { display:flex; gap:8px; }.stock-form-footer .danger { color:#c9342b; border-color:#eca19d; }
 .stock-history-modal { width:min(1200px,96vw); padding-bottom:18px; }.stock-history-filters { display:flex; gap:9px; padding:16px 18px; }.stock-history-modal .table-wrap { margin:0 18px; max-height:65vh; }.stock-log-detail { max-width:420px; white-space:pre-wrap; }

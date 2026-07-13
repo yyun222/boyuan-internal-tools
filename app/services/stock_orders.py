@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from app.db.models import StockOrder, StockOrderFieldUpdate, User
+from app.auth import utcnow
+from app.db.models import StockOrder, StockOrderFieldUpdate, StockOrderWarning, User
 
 
 FIELD_META = {
@@ -19,7 +20,6 @@ FIELD_META = {
     "quality_requirement": ("销售部", "质量要求", "sales"),
     "delivery_requirement": ("销售部", "交货期需求", "sales"),
     "sales_note": ("销售部", "销售其他说明", "sales"),
-    "sales_owner": ("销售部", "销售负责人", "sales"),
     "purchase_material": ("采购部", "需采购原料", "purchase"),
     "purchase_quantity": ("采购部", "采购数量", "purchase"),
     "purchase_not_required": ("采购部", "无需采购", "purchase"),
@@ -49,6 +49,11 @@ MODULES = {
 DEPARTMENT_MODULE = {"销售部": "sales", "采购部": "purchase", "生产部": "production", "质量部": "qc", "QC/质检部": "qc"}
 
 
+def business_date(value: datetime | None = None) -> str:
+    """Return the China business date for naive UTC timestamps used by the app."""
+    return ((value or utcnow()) + timedelta(hours=8)).date().isoformat()
+
+
 def user_modules(user: User) -> set[str]:
     if any(role.deleted_at is None and role.name == "admin" for role in user.roles):
         return {"sales", "purchase", "production", "qc"}
@@ -60,10 +65,7 @@ def user_modules(user: User) -> set[str]:
 
 
 def can_edit_module(user: User, module: str) -> bool:
-    # Current rollout policy: every authenticated role with feature access may
-    # update every department section. Keep this helper as the single policy
-    # switch for a future return to department-scoped editing.
-    return module in {"sales", "purchase", "production", "qc"}
+    return module in user_modules(user)
 
 
 def is_admin(user: User) -> bool:
@@ -83,15 +85,16 @@ def clean_fields(raw: dict) -> dict:
 
 
 def field_locks(db, order: StockOrder) -> dict[str, bool]:
-    today = datetime.utcnow().date().isoformat()
+    today = business_date()
     updates = {row.field_key: row.updated_date for row in db.query(StockOrderFieldUpdate).filter_by(order_id=order.id).all()}
-    return {key: bool(getattr(order, key) not in (None, "", False) and updates.get(key, today) < today) for key in FIELD_META}
+    fallback = business_date(order.updated_at or order.created_at)
+    return {key: bool(getattr(order, key) not in (None, "", False) and updates.get(key, fallback) < today) for key in FIELD_META}
 
 
 def overdue(order: StockOrder) -> dict[str, str]:
     if order.archive_status == "已取消" or order.order_type == "留货订单":
         return {}
-    today = datetime.utcnow().date().isoformat()
+    today = business_date()
     result = {}
     for module, (due_key, done_key, skip_key, label) in MODULES.items():
         if getattr(order, skip_key):
@@ -105,6 +108,55 @@ def overdue(order: StockOrder) -> dict[str, str]:
     return result
 
 
+def sync_order_warnings(db, order: StockOrder, now: datetime | None = None) -> None:
+    """Materialize each warning once so later performance exports remain auditable."""
+    if order.archive_status == "已取消" or order.order_type == "留货订单":
+        return
+    now = now or utcnow()
+    existing = {
+        row.warning_type
+        for row in db.query(StockOrderWarning).filter_by(order_id=order.id).all()
+    }
+
+    def add(kind: str, department: str, message: str, threshold: datetime | None, detail: str = "") -> None:
+        if kind in existing:
+            return
+        db.add(StockOrderWarning(
+            order_id=order.id, order_no=order.order_no, department=department,
+            warning_type=kind, message=message, threshold_at=threshold,
+            occurred_at=now, detail=detail,
+        ))
+        existing.add(kind)
+
+    if order.sales_completed_at:
+        deadline = order.sales_completed_at + timedelta(hours=24)
+        for module, department, responded in (
+            ("purchase", "采购部", order.purchase_responded_at),
+            ("production", "生产部", order.production_responded_at),
+        ):
+            if (responded and responded > deadline) or (not responded and now > deadline):
+                add(f"{module}_response_24h", department, f"{department}未在销售完成后24小时内填写", deadline)
+
+    if order.purchase_responded_at and order.production_responded_at:
+        qc_start = max(order.purchase_responded_at, order.production_responded_at)
+        deadline = qc_start + timedelta(hours=12)
+        if (order.qc_responded_at and order.qc_responded_at > deadline) or (not order.qc_responded_at and now > deadline):
+            add("qc_response_12h", "质量部", "质量部未在采购和生产填写后12小时内填写", deadline)
+
+    date_checks = (
+        ("sales_delivery_late", "销售部", order.actual_delivery, order.delivery_requirement, True, "交货超时"),
+        ("purchase_schedule_overdue", "采购部", business_date(order.purchase_completed_at) if order.purchase_completed_at else "", order.arrival_date, bool(order.purchase_completed_at), "采购超过预计到货时间"),
+        ("production_schedule_overdue", "生产部", business_date(order.production_completed_at) if order.production_completed_at else "", order.expected_delivery_date, bool(order.production_completed_at), "生产超过预计完成时间"),
+        ("qc_schedule_overdue", "质量部", business_date(order.qc_completed_at) if order.qc_completed_at else "", order.coa_time, bool(order.qc_completed_at), "QC超过预计完成时间"),
+    )
+    for kind, department, actual, due, finished, message in date_checks:
+        is_late = bool(actual and due and actual > due)
+        is_pending_overdue = bool(due and not finished and business_date(now) > due and department != "销售部")
+        if is_late or is_pending_overdue:
+            detail = f"要求：{due}；实际：{actual or '尚未完成'}"
+            add(kind, department, message, datetime.fromisoformat(due), detail)
+
+
 def order_payload(db, order: StockOrder, include_locks: bool = False) -> dict:
     data = {key: getattr(order, key) for key in FIELD_META}
     for key in BOOLEAN_FIELDS:
@@ -113,12 +165,19 @@ def order_payload(db, order: StockOrder, include_locks: bool = False) -> dict:
         "id": order.id,
         "order_no": order.order_no,
         "archive_status": order.archive_status,
+        "sales_completed_at": order.sales_completed_at.isoformat() if order.sales_completed_at else "",
         "purchase_completed_at": order.purchase_completed_at.isoformat() if order.purchase_completed_at else "",
         "production_completed_at": order.production_completed_at.isoformat() if order.production_completed_at else "",
         "qc_completed_at": order.qc_completed_at.isoformat() if order.qc_completed_at else "",
+        "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else "",
+        "cancelled_reason": order.cancelled_reason or "",
         "created_at": order.created_at.isoformat() if order.created_at else "",
         "updated_at": order.updated_at.isoformat() if order.updated_at else "",
         "overdue": overdue(order),
+        "warnings": [] if order.archive_status == "已取消" else [{
+            "department": row.department, "type": row.warning_type,
+            "message": row.message, "occurredAt": row.occurred_at.isoformat(),
+        } for row in db.query(StockOrderWarning).filter_by(order_id=order.id).order_by(StockOrderWarning.occurred_at).all()],
     })
     if include_locks:
         data["locks"] = field_locks(db, order)

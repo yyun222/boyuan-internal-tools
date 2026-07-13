@@ -7,20 +7,28 @@ const resultsEl = $("#results");
 let lastResult = null;
 let currentUser = null;
 
-// --- Auth: show current user, handle logout ---
-// If /api/me returns 401, the server-side redirect was bypassed (e.g. cached
-// HTML, stale cookie). Force a navigation to /login as a client-side guard.
-fetch("/api/me", { cache: "no-store" })
+// --- Auth: reuse the permission snapshot returned by login. Direct visits and
+// new tabs fall back to one /api/me request; backend authorization remains live.
+const cachedLoginUser = (() => {
+  try { return JSON.parse(sessionStorage.getItem("boyuan_current_user") || "null"); }
+  catch (_) { return null; }
+})();
+
+const currentUserRequest = cachedLoginUser
+  ? Promise.resolve({user: cachedLoginUser})
+  : fetch("/api/me", { cache: "no-store" })
   .then((r) => {
     if (r.status === 401) {
       window.location.replace("/login");
       return null;
     }
     return r.ok ? r.json() : null;
-  })
-  .then((d) => {
+  });
+
+currentUserRequest.then((d) => {
     if (!d || !d.user) return;
     currentUser = d.user;
+    sessionStorage.setItem("boyuan_current_user", JSON.stringify(d.user));
     $("#current-user").textContent = d.user.email || d.user.username || "";
     applyPermissions(d.user);
     if (d.user.permissions?.manageUsers) {
@@ -36,6 +44,7 @@ fetch("/api/me", { cache: "no-store" })
 
 $("#logout-btn").addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });
+  sessionStorage.removeItem("boyuan_current_user");
   window.location.href = "/login";
 });
 
@@ -262,7 +271,7 @@ async function loadUsers() {
       <tbody>${data.users.map((user) => `
         <tr>
           <td>${escapeHtml(user.displayName || "")}<br><span class="muted">${escapeHtml(user.email)}</span></td>
-          <td>${escapeHtml(user.roles.join("、") || "—")}</td>
+          <td>${escapeHtml((user.roleDisplayNames || user.roles || []).join("、") || "—")}</td>
           <td><span class="user-state ${user.isActive ? user.status : "inactive"}">${user.isActive ? (user.status === "active" ? "正常" : "待设置密码") : "已停用"}</span></td>
           <td>${formatDateTime(user.invitedAt)}</td>
           <td>${formatDateTime(user.passwordSetAt)}</td>
@@ -859,9 +868,10 @@ function downloadAssetCsv(name, rows) {
 let stockUser = null;
 let stockCurrent = null;
 let stockHistory = [];
+let stockMode = "view";
 const STOCK_GROUPS = [
-  ["基础与销售", "sales", [["internal_name","内部简称"],["cas","CAS"],["quantity","数量"],["order_type","订单类型","select"],["salesperson","业务员"],["demand_date","提需求日期","date"],["customer_name","客户名称"],["order_situation","订单情况","textarea"],["quality_requirement","质量要求","textarea"],["delivery_requirement","交货期需求","date"],["sales_note","其他说明","textarea"],["sales_owner","销售负责人"],["actual_delivery","实际交货","date"]]],
-  ["采购部", "purchase", [["purchase_not_required","无需采购","checkbox"],["purchase_material","需采购原料","textarea"],["purchase_quantity","采购数量"],["purchase_items","采购原料明细","textarea"],["purchase_date","采购日期","date"],["arrival_date","预计到货时间","date"],["purchase_note","采购说明","textarea"],["purchase_owner","采购负责人"]]],
+  ["基础与销售", "sales", [["internal_name","内部简称"],["cas","CAS"],["quantity","数量"],["order_type","订单类型","select"],["salesperson","业务员"],["demand_date","提需求日期","date"],["customer_name","客户名称"],["order_situation","订单情况","textarea"],["quality_requirement","质量要求","textarea"],["delivery_requirement","交货期需求","date"],["sales_note","其他说明","textarea"],["actual_delivery","实际交货","date"]]],
+  ["采购部", "purchase", [["purchase_not_required","无需采购","checkbox"],["purchase_items","采购原料及数量","items"],["purchase_date","采购日期","date"],["arrival_date","预计到货时间","date"],["purchase_note","采购说明","textarea"],["purchase_owner","采购负责人"]]],
   ["生产部", "production", [["production_not_required","无需生产","checkbox"],["production_form_date","填表日期","date"],["production_status","评估当前状态","textarea"],["expected_delivery_date","预计完成时间","date"],["production_note","生产说明","textarea"]]],
   ["质量部", "qc", [["qc_not_required","无需检测","checkbox"],["coa_time","预计完成时间","date"],["qc_note","QC备注","textarea"],["qc_owner","QC负责人"]]],
 ];
@@ -872,16 +882,23 @@ function initStockOrders(user) {
   $("#stock-search-btn")?.addEventListener("click", loadStockOrders);
   $("#stock-history-btn")?.addEventListener("click", openStockHistory);
   $("#stock-history-search")?.addEventListener("click", loadStockHistory);
-  $("#stock-history-export")?.addEventListener("click", exportStockHistory);
+  $("#stock-history-export")?.addEventListener("click", () => exportStockCsv("changes"));
+  $("#stock-orders-export")?.addEventListener("click", () => exportStockCsv("orders"));
+  $("#stock-performance-export")?.addEventListener("click", () => exportStockCsv("performance"));
   document.querySelector("[data-stock-close]")?.addEventListener("click", closeStockOrder);
   document.querySelector("[data-stock-history-close]")?.addEventListener("click", () => $("#stock-history-mask").classList.remove("active"));
-  if (!user.permissions?.updateStockOrders) $("#stock-new-btn").disabled = true;
+  const canCreate = user.permissions?.updateStockOrders && (user.roles?.includes("admin") || user.departments?.includes("销售部"));
+  if (!canCreate) $("#stock-new-btn")?.classList.add("hidden");
+  if (!user.roles?.includes("admin")) {
+    ["#stock-history-month","#stock-history-export","#stock-orders-export","#stock-performance-export"].forEach(id => $(id)?.classList.add("hidden"));
+  }
   loadStockOrders();
 }
 
 async function stockApi(url, options = {}) {
   const resp = await fetch(url, {headers:{"Content-Type":"application/json", ...(options.headers || {})}, ...options});
   const data = await resp.json().catch(() => ({}));
+  if (resp.status === 401) { sessionStorage.removeItem("boyuan_current_user"); window.location.replace("/login"); }
   if (!resp.ok) throw new Error(data.detail || `请求失败 (${resp.status})`);
   return data;
 }
@@ -898,28 +915,43 @@ async function loadStockOrders() {
 }
 
 function stockState(order, module) {
-  if (order.archive_status === "已取消") return '<span class="stock-state cancelled">已取消</span>';
+  if (order.archive_status === "已取消") {
+    const completed = module === "sales" ? (order.sales_completed_at || order.actual_delivery) : order[`${module}_completed_at`];
+    return completed ? '<span class="stock-state done">已完成</span>' : '<span class="stock-state muted-state">—</span>';
+  }
   if (order.order_type === "留货订单" && module !== "sales") return '<span class="stock-state muted-state">无需处理</span>';
-  if (module === "sales") return order.actual_delivery ? '<span class="stock-state done">已交货</span>' : '<span class="stock-state pending">待交货</span>';
+  const department = {sales:"销售部",purchase:"采购部",production:"生产部",qc:"质量部"}[module];
+  const warning = order.warnings?.find(item => item.department === department);
+  if (module === "sales") return warning ? `<span class="stock-state late">${escapeHtml(warning.message)}</span>` : (order.actual_delivery ? '<span class="stock-state done">已交货</span>' : (order.sales_completed_at ? '<span class="stock-state done">已填写</span>' : '<span class="stock-state pending">待填写</span>'));
   const key = `${module}_completed_at`;
+  if (warning) return `<span class="stock-state late">${escapeHtml(warning.message)}</span>`;
   if (order[key]) return `<span class="stock-state done">已完成</span>`;
   if (order.overdue?.[module]) return `<span class="stock-state late">${escapeHtml(order.overdue[module])}</span>`;
   return '<span class="stock-state pending">进行中</span>';
 }
 
 function stockRow(order) {
-  return `<tr><td><strong>${escapeHtml(order.order_no)}</strong></td><td>${escapeHtml(order.order_type)}</td><td>${escapeHtml(order.customer_name || "—")}</td><td>${escapeHtml(order.internal_name || "—")}<br><span class="muted">${escapeHtml(order.cas || "")}</span></td><td>${escapeHtml(order.quantity || "—")}</td><td>${stockState(order,"sales")}</td><td>${stockState(order,"purchase")}</td><td>${stockState(order,"production")}</td><td>${stockState(order,"qc")}</td><td>${escapeHtml(order.actual_delivery || "—")}</td><td>${escapeHtml((order.updated_at || "").replace("T"," ").slice(0,16))}</td><td><button class="stock-open-btn" onclick="openStockOrder(${order.id})">查看</button></td></tr>`;
+  const moduleByDepartment = {"销售部":"sales","采购部":"purchase","生产部":"production","质量部":"qc"};
+  const ownEditableModule = stockUser.departments?.map(d => moduleByDepartment[d]).find(module => module && !(module === "sales" ? order.sales_completed_at : order[`${module}_completed_at`]));
+  const canEditDepartment = stockUser.roles?.includes("admin") || Boolean(ownEditableModule);
+  const canEdit = order.archive_status !== "已取消" && stockUser.permissions?.updateStockOrders && canEditDepartment;
+  const cancel = stockUser.roles?.includes("admin") && order.archive_status !== "已取消" ? `<button class="danger" onclick="cancelStockOrder(${order.id})">取消订单</button>` : "";
+  return `<tr class="${order.archive_status === "已取消" ? "stock-cancelled-row" : ""}"><td><strong>${escapeHtml(order.order_no)}</strong>${order.archive_status === "已取消" ? '<br><span class="stock-state cancelled">已取消</span>' : ""}</td><td>${escapeHtml(order.order_type)}</td><td>${escapeHtml(order.customer_name || "—")}</td><td>${escapeHtml(order.internal_name || "—")}<br><span class="muted">${escapeHtml(order.cas || "")}</span></td><td>${escapeHtml(order.quantity || "—")}</td><td>${stockState(order,"sales")}</td><td>${stockState(order,"purchase")}</td><td>${stockState(order,"production")}</td><td>${stockState(order,"qc")}</td><td>${escapeHtml(order.actual_delivery || "—")}</td><td>${escapeHtml((order.updated_at || "").replace("T"," ").slice(0,16))}</td><td><button class="stock-open-btn" onclick="openStockOrder(${order.id},'view')">查看</button>${canEdit ? `<button onclick="openStockOrder(${order.id},'edit')">修改</button>` : ""}${cancel}</td></tr>`;
 }
 
-async function openStockOrder(id = null) {
+async function openStockOrder(id = null, mode = "edit") {
   try {
-    stockCurrent = id ? (await stockApi(`/api/stock-orders/${id}`)).order : {order_type:"备货订单", locks:{}, editableModules:["sales","purchase","production","qc"], isAdmin:stockUser.roles?.includes("admin")};
-    $("#stock-modal-title").textContent = id ? "订单详情" : "新建订单";
+    stockMode = id ? mode : "edit";
+    const ownModules = stockUser.roles?.includes("admin") ? ["sales","purchase","production","qc"] : ({"销售部":"sales","采购部":"purchase","生产部":"production","质量部":"qc"})[stockUser.departments?.[0]] ? stockUser.departments.map(d => ({"销售部":"sales","采购部":"purchase","生产部":"production","质量部":"qc"})[d]).filter(Boolean) : [];
+    stockCurrent = id ? (await stockApi(`/api/stock-orders/${id}`)).order : {order_type:"备货订单", locks:{}, editableModules:ownModules, isAdmin:stockUser.roles?.includes("admin")};
+    $("#stock-modal-title").textContent = id ? (stockMode === "view" ? "查看订单" : "修改订单") : "新建订单";
     $("#stock-modal-number").textContent = stockCurrent.order_no || "保存后自动生成订单号";
     $("#stock-modal-body").innerHTML = renderStockForm();
     $("#stock-modal-mask").classList.add("active");
     $("#stock-order-form").addEventListener("submit", saveStockOrder);
     document.querySelectorAll("[data-stock-complete]").forEach(btn => btn.addEventListener("click", () => completeStockModule(btn.dataset.stockComplete)));
+    document.querySelectorAll("[data-stock-recognize]").forEach(btn => btn.addEventListener("click", () => recognizeStockText(btn.dataset.stockRecognize)));
+    $("#stock-add-purchase-row")?.addEventListener("click", addPurchaseRow);
     $("#stock-cancel-btn")?.addEventListener("click", cancelStockOrder);
   } catch (err) { alert(err.message); }
 }
@@ -929,7 +961,20 @@ function renderStockField([key,label,type]) {
   const value = stockCurrent[key] ?? "";
   const module = STOCK_GROUPS.find(group => group[2].some(field => field[0] === key))?.[1] || "sales";
   const locked = stockCurrent.locks?.[key];
-  const disabled = !stockUser.permissions?.updateStockOrders || !stockCurrent.editableModules.includes(module) || (locked && !stockCurrent.isAdmin) || stockCurrent.archive_status === "已取消";
+  const completed = module === "sales" ? stockCurrent.sales_completed_at : stockCurrent[`${module}_completed_at`];
+  const disabled = stockMode === "view" || !stockUser.permissions?.updateStockOrders || !stockCurrent.editableModules.includes(module) || (completed && !stockCurrent.isAdmin) || (locked && !stockCurrent.isAdmin) || stockCurrent.archive_status === "已取消";
+  if (stockMode === "view") {
+    let shown = value || "—";
+    if (type === "checkbox") shown = value ? "是" : "否";
+    if (type === "items") { try { shown = JSON.parse(value || "[]").map(x => `${x.material || ""} × ${x.quantity || ""}`).join("；") || "—"; } catch (_) {} }
+    return `<div class="stock-view-field"><strong>${label}</strong><span>${escapeHtml(shown)}</span></div>`;
+  }
+  if (type === "items") {
+    let items = []; try { items = JSON.parse(value || "[]"); } catch (_) {}
+    if (!items.length && (stockCurrent.purchase_material || stockCurrent.purchase_quantity)) items = [{material:stockCurrent.purchase_material, quantity:stockCurrent.purchase_quantity}];
+    if (!items.length) items = [{material:"",quantity:""}];
+    return `<div class="wide stock-purchase-items" data-disabled="${disabled ? "true" : "false"}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><div id="stock-purchase-item-rows">${items.map(item => purchaseItemRow(item, disabled)).join("")}</div>${disabled ? "" : '<button id="stock-add-purchase-row" type="button">添加一行</button>'}</div>`;
+  }
   if (type === "checkbox") return `<label class="stock-check"><input name="${key}" type="checkbox" ${value ? "checked" : ""} ${disabled ? "disabled" : ""}>${label}${locked ? ' <em>已锁定</em>' : ''}</label>`;
   if (type === "select") return `<label><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><select name="${key}" ${disabled ? "disabled" : ""}><option ${value === "备货订单" ? "selected" : ""}>备货订单</option><option ${value === "留货订单" ? "selected" : ""}>留货订单</option></select></label>`;
   if (type === "textarea") return `<label class="wide"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><textarea name="${key}" ${disabled ? "disabled" : ""}>${escapeHtml(value)}</textarea></label>`;
@@ -941,9 +986,51 @@ function renderStockForm() {
   const cancelled = stockCurrent.archive_status === "已取消";
   return `<form id="stock-order-form"><div class="stock-modules">${STOCK_GROUPS.map(([title,module,fields]) => {
     const done = stockCurrent[`${module}_completed_at`];
-    const canComplete = module !== "sales" && stockCurrent.id && !hold && !cancelled && stockCurrent.editableModules.includes(module) && !done;
-    return `<section class="stock-module"><div class="stock-module-head"><h4>${title}</h4>${module !== "sales" ? (done ? `<span class="stock-state done">完成于 ${escapeHtml(done.slice(0,16).replace("T"," "))}</span>` : (canComplete ? `<button type="button" data-stock-complete="${module}">完成确认</button>` : "")) : ""}</div><div class="stock-form-grid">${fields.map(renderStockField).join("")}</div></section>`;
-  }).join("")}</div>${stockCurrent.isAdmin ? '<label class="stock-reason"><span>管理员修正原因（修改跨日锁定字段时必填）</span><input name="reason"></label>' : ''}<div class="stock-form-footer">${stockCurrent.isAdmin && stockCurrent.id && !cancelled ? '<button id="stock-cancel-btn" class="danger" type="button">取消订单</button>' : '<span></span>'}<div><button type="button" data-stock-close onclick="closeStockOrder()">关闭</button>${!cancelled && stockUser.permissions?.updateStockOrders ? '<button class="primary" type="submit">保存</button>' : ''}</div></div></form>`;
+    const moduleDone = module === "sales" ? stockCurrent.sales_completed_at : done;
+    const canComplete = stockMode === "edit" && stockCurrent.id && (!hold || module === "sales") && !cancelled && stockCurrent.editableModules.includes(module) && !moduleDone;
+    const recognize = stockMode === "edit" && ["sales","purchase"].includes(module) && stockCurrent.editableModules.includes(module) && (!moduleDone || stockCurrent.isAdmin) ? `<button type="button" data-stock-recognize="${module}">粘贴并识别</button>` : "";
+    return `<section class="stock-module"><div class="stock-module-head"><h4>${title}</h4><div>${recognize}${moduleDone ? `<span class="stock-state done">完成于 ${escapeHtml(moduleDone.slice(0,16).replace("T"," "))}</span>` : (canComplete ? `<button type="button" data-stock-complete="${module}">完成确认</button>` : "")}</div></div><div class="stock-form-grid ${stockMode === "view" ? "stock-view-grid" : ""}">${fields.map(renderStockField).join("")}</div></section>`;
+  }).join("")}</div>${stockMode === "edit" && stockCurrent.isAdmin ? '<label class="stock-reason"><span>管理员修正原因（修改跨日锁定字段时必填）</span><input name="reason"></label>' : ''}<div class="stock-form-footer"><span></span><div><button type="button" data-stock-close onclick="closeStockOrder()">关闭</button>${stockMode === "edit" && !cancelled && stockUser.permissions?.updateStockOrders ? '<button class="primary" type="submit">保存</button>' : ''}</div></div></form>`;
+}
+
+function purchaseItemRow(item = {}, disabled = false) { return `<div class="stock-purchase-row"><input data-purchase-material placeholder="需采购原料" value="${escapeHtml(item.material || "")}" ${disabled ? "disabled" : ""}><input data-purchase-quantity placeholder="采购数量" value="${escapeHtml(item.quantity || "")}" ${disabled ? "disabled" : ""}>${disabled ? "" : '<button type="button" onclick="this.parentElement.remove()">删除</button>'}</div>`; }
+function addPurchaseRow() { $("#stock-purchase-item-rows")?.insertAdjacentHTML("beforeend", purchaseItemRow()); }
+
+function recognizeStockText(module) {
+  const pasted = prompt("请粘贴文字或从 Excel 复制的表格内容：");
+  if (!pasted) return;
+  const labelToKey = {};
+  STOCK_GROUPS.flatMap(g => g[2]).forEach(([key,label]) => { labelToKey[label.replace(/\s/g, "")] = key; });
+  const rows = pasted.split(/\r?\n/).map(line => line.split("\t").map(x => x.trim())).filter(parts => parts.some(Boolean));
+  const assignments = {};
+  const hasHeaderRow = rows.length >= 2 && rows[0].some(label => labelToKey[label.replace(/\s/g, "")]);
+  if (hasHeaderRow) {
+    rows[0].forEach((label, index) => {
+      const key = labelToKey[label.replace(/\s/g, "")];
+      if (key && rows[1][index] != null) assignments[key] = rows[1][index];
+    });
+  }
+  pasted.split(/\r?\n/).forEach((line, rowIndex) => {
+    if (hasHeaderRow && rowIndex === 0) return;
+    const parts = line.split(/\t|[:：]/);
+    if (parts.length < 2) return;
+    const key = labelToKey[parts.shift().replace(/\s/g, "")];
+    if (key) assignments[key] = parts.join(" ").trim();
+  });
+  let purchaseRows = [];
+  if (module === "purchase") {
+    const dataRows = rows.filter(parts => !/原料|物料/.test(parts[0]) || parts.length < 2);
+    purchaseRows = dataRows.filter(parts => parts.length >= 2).map(parts => ({material:parts[0], quantity:parts[1]}));
+  }
+  const labels = Object.entries(assignments).map(([key,value]) => `${STOCK_GROUPS.flatMap(g => g[2]).find(field => field[0] === key)?.[1] || key}：${value}`);
+  if (purchaseRows.length) labels.push(`采购明细：${purchaseRows.length} 行`);
+  if (!labels.length) { alert("未识别到可填写的字段，请检查字段名称或表格格式。"); return; }
+  if (!confirm(`识别到以下内容，确认填入表单？\n\n${labels.join("\n")}`)) return;
+  Object.entries(assignments).forEach(([key,value]) => {
+    const input = key && $("#stock-order-form")?.elements[key];
+    if (input && !input.disabled) input.value = value;
+  });
+  if (purchaseRows.length) $("#stock-purchase-item-rows").innerHTML = purchaseRows.map(item => purchaseItemRow(item)).join("");
 }
 
 function collectStockFields(form) {
@@ -953,6 +1040,9 @@ function collectStockFields(form) {
     if (!input || input.disabled) return;
     fields[key] = type === "checkbox" ? input.checked : input.value;
   });
+  const purchaseContainer = document.querySelector(".stock-purchase-items");
+  const purchaseRows = [...document.querySelectorAll(".stock-purchase-row")].filter(row => !row.querySelector("input")?.disabled).map(row => ({material:row.querySelector("[data-purchase-material]").value.trim(), quantity:row.querySelector("[data-purchase-quantity]").value.trim()})).filter(x => x.material || x.quantity);
+  if (purchaseContainer?.dataset.disabled === "false" && stockMode === "edit" && (purchaseRows.length || stockCurrent.purchase_items)) fields.purchase_items = JSON.stringify(purchaseRows);
   return fields;
 }
 
@@ -966,15 +1056,20 @@ async function saveStockOrder(event) {
 }
 
 async function completeStockModule(module) {
+  if (!confirm("确认该模块已经填写完成？完成后普通账号将不能再修改。")) return;
   const form = $("#stock-order-form");
   try { await stockApi(`/api/stock-orders/${stockCurrent.id}/complete`, {method:"POST", body:JSON.stringify({module, fields:collectStockFields(form)})}); await loadStockOrders(); await openStockOrder(stockCurrent.id); }
   catch (err) { alert(err.message); }
 }
 
-async function cancelStockOrder() {
-  const reason = prompt("请输入取消原因：");
-  if (!reason) return;
-  try { await stockApi(`/api/stock-orders/${stockCurrent.id}/cancel`, {method:"POST", body:JSON.stringify({reason})}); closeStockOrder(); await loadStockOrders(); }
+async function cancelStockOrder(id = null) {
+  try {
+    if (id && stockCurrent?.id !== id) stockCurrent = (await stockApi(`/api/stock-orders/${id}`)).order;
+    if (!confirm("确定要取消该订单吗？取消后各部门无需继续填写。")) return;
+    const reason = prompt("请输入取消原因：");
+    if (!reason) return;
+    await stockApi(`/api/stock-orders/${stockCurrent.id}/cancel`, {method:"POST", body:JSON.stringify({reason})}); closeStockOrder(); await loadStockOrders();
+  }
   catch (err) { alert(err.message); }
 }
 
@@ -983,10 +1078,22 @@ window.closeStockOrder = closeStockOrder;
 
 async function openStockHistory() { $("#stock-history-mask").classList.add("active"); await loadStockHistory(); }
 async function loadStockHistory() {
-  const params = new URLSearchParams({order:$("#stock-history-order").value, operator:$("#stock-history-operator").value});
+  const params = stockHistoryParams();
   try { const data = await stockApi("/api/stock-orders-history?" + params); stockHistory = data.logs; $("#stock-history-rows").innerHTML = stockHistory.length ? stockHistory.map(log => `<tr><td>${escapeHtml(log.operatedAt.replace("T"," ").slice(0,19))}</td><td>${escapeHtml(log.orderNo)}</td><td>${escapeHtml(log.module)} / ${escapeHtml(log.label)}</td><td class="stock-log-detail">${escapeHtml(log.newValue)}</td><td>${escapeHtml(log.operator)}</td><td>${escapeHtml(log.reason || "—")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">暂无记录</td></tr>'; } catch(err) { alert(err.message); }
 }
-function exportStockHistory() {
-  const rows = [["时间","订单号","模块","动作","内容","操作人","原因"], ...stockHistory.map(log => [log.operatedAt,log.orderNo,log.module,log.label,log.newValue,log.operator,log.reason])];
-  downloadAssetCsv("备货订单历史.csv", rows);
+function stockHistoryParams() { return new URLSearchParams({order:$("#stock-history-order").value, operator:$("#stock-history-operator").value, month:$("#stock-history-month").value}); }
+async function exportStockCsv(kind) {
+  try {
+    const resp = await fetch(`/api/stock-orders-export/${kind}?${stockHistoryParams()}`);
+    if (resp.status === 401) { sessionStorage.removeItem("boyuan_current_user"); window.location.replace("/login"); return; }
+    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.detail || "导出失败"); }
+    const blob = await resp.blob();
+    const disposition = resp.headers.get("Content-Disposition") || "";
+    const matched = disposition.match(/filename\*=UTF-8''([^;]+)/);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = matched ? decodeURIComponent(matched[1]) : "备货订单.csv";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  } catch (err) { alert(err.message); }
 }

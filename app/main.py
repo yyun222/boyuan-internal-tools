@@ -5,11 +5,13 @@ from __future__ import annotations
 import os
 import json
 import secrets
+import csv
+import io
 from html import escape
 from pathlib import Path
 from typing import Optional
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
@@ -29,11 +31,11 @@ from app.auth import (
 from app.db import SessionLocal, engine, get_db, init_database
 from app.db.models import (
     ActivityLog, AssetLedgerAsset, AssetLedgerLog, Role, StockOrder,
-    StockOrderChangeLog, StockOrderFieldUpdate, User,
+    StockOrderChangeLog, StockOrderFieldUpdate, StockOrderWarning, User,
 )
 from app.services.stock_orders import (
-    FIELD_META, MODULES, can_edit_module, clean_fields, field_locks, is_admin,
-    order_payload,
+    FIELD_META, MODULES, business_date, can_edit_module, clean_fields, field_locks, is_admin,
+    order_payload, sync_order_warnings, user_modules,
 )
 from app.services.export import build_workbook
 from app.services.reconcile import reconcile
@@ -53,6 +55,7 @@ app.add_middleware(
     session_cookie="boyuan_session",
     same_site="lax",
     https_only=False,  # set True behind HTTPS
+    max_age=8 * 60 * 60,
 )
 init_database(engine, SessionLocal)
 
@@ -122,6 +125,10 @@ def _role_names(user: User) -> list[str]:
     return [role.name for role in user.roles if role.deleted_at is None]
 
 
+def _role_display_names(user: User) -> list[str]:
+    return [role.display_name for role in user.roles if role.deleted_at is None]
+
+
 def _role_departments(user: User) -> list[str]:
     return sorted({role.department for role in user.roles if role.deleted_at is None and role.scope == "department" and role.department})
 
@@ -168,7 +175,16 @@ def _user_payload(user: User) -> dict:
 
 def _current_user(db: Session, request: Request) -> Optional[User]:
     user_id = request.session.get("user_id")
-    if not user_id:
+    authenticated_at = request.session.get("authenticated_at")
+    if not user_id or not authenticated_at:
+        return None
+    try:
+        login_time = datetime.fromisoformat(authenticated_at)
+    except (TypeError, ValueError):
+        request.session.clear()
+        return None
+    if utcnow() - login_time >= timedelta(hours=8):
+        request.session.clear()
         return None
     user = db.get(User, user_id)
     if not user or not user.is_active or user.deleted_at is not None:
@@ -460,6 +476,7 @@ async def api_login(payload: LoginPayload, request: Request, db: Session = Depen
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     user.last_activity_at = utcnow()
     request.session["user_id"] = user.id
+    request.session["authenticated_at"] = utcnow().isoformat()
     _log_activity(db, user, "login", "auth", "用户登录")
     return {"ok": True, "user": _user_payload(user)}
 
@@ -510,6 +527,7 @@ async def api_users(request: Request, db: Session = Depends(get_db)):
                 "email": user.email,
                 "displayName": user.display_name,
                 "roles": _role_names(user),
+                "roleDisplayNames": _role_display_names(user),
                 "status": "active" if user.is_active and user.password_hash else "pending",
                 "isActive": user.is_active,
                 "hasPassword": bool(user.password_hash),
@@ -634,6 +652,7 @@ async def api_signup(payload: SignupPayload, request: Request, db: Session = Dep
     user.password_set_at = utcnow()
     user.last_activity_at = utcnow()
     request.session["user_id"] = user.id
+    request.session["authenticated_at"] = utcnow().isoformat()
     _log_activity(db, user, "signup", "auth", "用户完成注册并设置密码")
     return {"ok": True, "user": _user_payload(user)}
 
@@ -710,7 +729,7 @@ async def api_export(request: Request, db: Session = Depends(get_db)):
 
 
 def _next_stock_order_no(db: Session) -> str:
-    prefix = "BH" + datetime.utcnow().strftime("%Y%m%d")
+    prefix = "BH" + business_date().replace("-", "")
     latest = db.query(StockOrder).filter(StockOrder.order_no.like(prefix + "-%")).order_by(StockOrder.order_no.desc()).first()
     number = int(latest.order_no.rsplit("-", 1)[-1]) + 1 if latest else 1
     return f"{prefix}-{number:04d}"
@@ -744,13 +763,16 @@ async def api_stock_orders(request: Request, q: str = "", order_type: str = "", 
     rows = query.order_by(StockOrder.updated_at.desc(), StockOrder.id.desc()).limit(500).all()
     if incomplete:
         key = incomplete.lower()
-        rows = [row for row in rows if (
+        rows = [row for row in rows if row.archive_status != "已取消" and (
             (key in {"全部", "all"} and (not row.actual_delivery or any(not getattr(row, item[1]) for item in MODULES.values())))
             or (key in {"采购", "purchase"} and not row.purchase_completed_at)
             or (key in {"生产", "production"} and not row.production_completed_at)
             or (key in {"qc", "质量"} and not row.qc_completed_at)
             or (key in {"销售", "sales"} and not row.actual_delivery)
         )]
+    for row in rows:
+        sync_order_warnings(db, row)
+    db.commit()
     return {"orders": [order_payload(db, row) for row in rows]}
 
 
@@ -760,6 +782,8 @@ async def api_stock_order(order_id: int, request: Request, db: Session = Depends
     order = db.query(StockOrder).filter_by(id=order_id, deleted_at=None).one_or_none()
     if not order:
         raise HTTPException(404, "订单不存在")
+    sync_order_warnings(db, order)
+    db.commit()
     data = order_payload(db, order, include_locks=True)
     data["editableModules"] = sorted({module for module in {meta[2] for meta in FIELD_META.values()} if can_edit_module(user, module)})
     data["isAdmin"] = is_admin(user)
@@ -772,6 +796,8 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         raise HTTPException(400, "没有可保存的字段")
     is_new = order is None
     if is_new:
+        if not (is_admin(user) or "sales" in user_modules(user)):
+            raise HTTPException(403, "只有销售部门可以新建订单")
         order = StockOrder(order_no=_next_stock_order_no(db), created_by_user_id=user.id, updated_by_user_id=user.id)
         db.add(order)
         db.flush()
@@ -779,14 +805,15 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         raise HTTPException(400, "已取消订单不能修改")
     locks = field_locks(db, order)
     changes = []
-    today = datetime.utcnow().date().isoformat()
+    changed_modules = set()
+    today = business_date()
     for key, value in fields.items():
         module = FIELD_META[key][2]
         if not can_edit_module(user, module):
             raise HTTPException(403, f"当前角色不能修改{FIELD_META[key][0]}字段")
         if order.order_type == "留货订单" and module in {"purchase", "production", "qc"}:
             raise HTTPException(400, "留货订单无需采购、生产和QC填写")
-        done_key = next((values[1] for name, values in MODULES.items() if name == module), None)
+        done_key = "sales_completed_at" if module == "sales" else next((values[1] for name, values in MODULES.items() if name == module), None)
         if done_key and getattr(order, done_key) and not is_admin(user):
             raise HTTPException(403, f"{FIELD_META[key][0]}已完成确认")
         old = getattr(order, key)
@@ -797,6 +824,7 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         if locks.get(key) and is_admin(user) and not payload.reason.strip():
             raise HTTPException(400, "管理员修改跨日锁定字段必须填写修正原因")
         setattr(order, key, value)
+        changed_modules.add(module)
         changes.append(f"{FIELD_META[key][1]}：{old or '空'} → {value or '空'}")
         update = db.query(StockOrderFieldUpdate).filter_by(order_id=order.id, field_key=key).one_or_none()
         if update is None:
@@ -804,11 +832,20 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
             db.add(update)
         update.updated_date = today
         update.updated_by_user_id = user.id
+    responded_fields = {
+        "purchase": "purchase_responded_at", "production": "production_responded_at", "qc": "qc_responded_at",
+    }
+    for module, timestamp_field in responded_fields.items():
+        module_values = [getattr(order, key) for key, meta in FIELD_META.items() if meta[2] == module]
+        has_meaningful_value = any(value not in (None, "", False, "[]") for value in module_values)
+        if module in changed_modules and has_meaningful_value and not getattr(order, timestamp_field):
+            setattr(order, timestamp_field, utcnow())
     if changes:
         order.updated_by_user_id = user.id
         order.updated_at = utcnow()
         _stock_log(db, order, user, "all", "create" if is_new else "save", "新建订单" if is_new else "保存更新",
                    new_value="\n".join(changes), reason=payload.reason.strip())
+    sync_order_warnings(db, order)
     db.commit()
     db.refresh(order)
     return order
@@ -836,27 +873,34 @@ async def api_update_stock_order(order_id: int, payload: StockOrderPayload, requ
 @app.post("/api/stock-orders/{order_id}/complete")
 async def api_complete_stock_order(order_id: int, payload: StockCompletePayload, request: Request, db: Session = Depends(get_db)):
     user = _require_permission(request, db, "can_update_stock_orders")
-    if payload.module not in MODULES:
+    if payload.module not in {*MODULES, "sales"}:
         raise HTTPException(400, "完成模块无效")
     if not can_edit_module(user, payload.module):
         raise HTTPException(403, "当前角色不能完成该模块")
     order = db.query(StockOrder).filter_by(id=order_id, deleted_at=None).one_or_none()
     if not order:
         raise HTTPException(404, "订单不存在")
-    if order.archive_status == "已取消" or order.order_type == "留货订单":
+    if order.archive_status == "已取消" or (order.order_type == "留货订单" and payload.module != "sales"):
         raise HTTPException(400, "该订单不能完成此模块")
-    due_key, done_key, skip_key, label = MODULES[payload.module]
+    if payload.module == "sales":
+        due_key, done_key, skip_key, label = "", "sales_completed_at", "", "销售填写完成"
+    else:
+        due_key, done_key, skip_key, label = MODULES[payload.module]
     if getattr(order, done_key):
         raise HTTPException(400, "该模块已经完成")
     module_fields = {k: v for k, v in payload.fields.items() if k in FIELD_META and FIELD_META[k][2] == payload.module}
     if module_fields:
         _save_stock_order(db, user, StockOrderPayload(fields=module_fields), order)
-    if not getattr(order, due_key) and not getattr(order, skip_key):
+    if due_key and not getattr(order, due_key) and not getattr(order, skip_key):
         raise HTTPException(400, "请先填写预计日期或勾选无需处理")
     setattr(order, done_key, utcnow())
     order.updated_at = utcnow()
     order.updated_by_user_id = user.id
+    responded_field = {"purchase": "purchase_responded_at", "production": "production_responded_at", "qc": "qc_responded_at"}.get(payload.module)
+    if responded_field and not getattr(order, responded_field):
+        setattr(order, responded_field, utcnow())
     _stock_log(db, order, user, payload.module, "complete", "完成确认", new_value=label)
+    sync_order_warnings(db, order)
     db.commit()
     _log_activity(db, user, "complete_stock_order", "stock-orders", f"{order.order_no} · {label}")
     return {"ok": True, "order": order_payload(db, order, True)}
@@ -873,6 +917,8 @@ async def api_cancel_stock_order(order_id: int, payload: StockCancelPayload, req
     if not order:
         raise HTTPException(404, "订单不存在")
     order.archive_status = "已取消"
+    order.cancelled_at = utcnow()
+    order.cancelled_reason = payload.reason.strip()
     order.updated_at = utcnow()
     _stock_log(db, order, user, "all", "cancel", "取消订单", "未归档", "已取消", payload.reason.strip())
     db.commit()
@@ -881,19 +927,87 @@ async def api_cancel_stock_order(order_id: int, payload: StockCancelPayload, req
 
 
 @app.get("/api/stock-orders-history")
-async def api_stock_order_history(request: Request, order: str = "", operator: str = "", db: Session = Depends(get_db)):
-    _require_permission(request, db, "can_view_stock_orders")
+async def api_stock_order_history(request: Request, order: str = "", operator: str = "", month: str = "", db: Session = Depends(get_db)):
+    user = _require_permission(request, db, "can_view_stock_orders")
+    if month and not is_admin(user):
+        raise HTTPException(403, "只有管理员可以按月查询订单")
     query = db.query(StockOrderChangeLog)
     if order:
         query = query.filter(StockOrderChangeLog.order_no.like(f"%{order}%"))
     if operator:
         query = query.filter(StockOrderChangeLog.operator_name.like(f"%{operator}%"))
+    if month:
+        try:
+            start = datetime.strptime(month, "%Y-%m")
+            end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        except ValueError as exc:
+            raise HTTPException(400, "月份格式无效") from exc
+        query = query.join(StockOrder, StockOrder.id == StockOrderChangeLog.order_id).filter(StockOrder.created_at >= start, StockOrder.created_at < end)
     logs = query.order_by(StockOrderChangeLog.operated_at.desc()).limit(1000).all()
     return {"logs": [{
         "id": row.id, "orderNo": row.order_no, "module": row.module, "action": row.action,
         "label": row.field_label, "oldValue": row.old_value, "newValue": row.new_value,
         "operator": row.operator_name, "operatedAt": row.operated_at.isoformat(), "reason": row.reason,
     } for row in logs]}
+
+
+def _stock_export_orders(db: Session, order: str, operator: str, month: str):
+    query = db.query(StockOrder).filter(StockOrder.deleted_at.is_(None))
+    if order:
+        query = query.filter(StockOrder.order_no.like(f"%{order}%"))
+    if operator:
+        ids = db.query(StockOrderChangeLog.order_id).filter(StockOrderChangeLog.operator_name.like(f"%{operator}%")).distinct()
+        query = query.filter(StockOrder.id.in_(ids))
+    if month:
+        try:
+            start = datetime.strptime(month, "%Y-%m")
+            end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        except ValueError as exc:
+            raise HTTPException(400, "月份格式无效") from exc
+        query = query.filter(StockOrder.created_at >= start, StockOrder.created_at < end)
+    return query.order_by(StockOrder.created_at.desc()).all()
+
+
+def _csv_download(filename: str, rows: list[list]) -> Response:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerows(rows)
+    return Response(
+        content="\ufeff" + output.getvalue(), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@app.get("/api/stock-orders-export/{kind}")
+async def api_stock_order_export(kind: str, request: Request, order: str = "", operator: str = "", month: str = "", db: Session = Depends(get_db)):
+    user = _require_permission(request, db, "can_view_stock_orders")
+    if not is_admin(user):
+        raise HTTPException(403, "只有管理员可以导出备货订单数据")
+    orders = _stock_export_orders(db, order, operator, month)
+    for item in orders:
+        sync_order_warnings(db, item)
+    db.commit()
+    order_ids = [item.id for item in orders]
+    if kind == "orders":
+        rows = [["订单号","订单类型","创建时间","内部简称","CAS","数量","业务员","客户名称","提需求日期","交货期需求","实际交货","采购明细","采购预计到货","生产预计完成","QC预计完成","销售完成","采购完成","生产完成","QC完成","订单状态","取消原因"]]
+        for item in orders:
+            rows.append([item.order_no,item.order_type,item.created_at,item.internal_name,item.cas,item.quantity,item.salesperson,item.customer_name,item.demand_date,item.delivery_requirement,item.actual_delivery,item.purchase_items,item.arrival_date,item.expected_delivery_date,item.coa_time,item.sales_completed_at,item.purchase_completed_at,item.production_completed_at,item.qc_completed_at,item.archive_status,item.cancelled_reason])
+        filename = "备货订单.csv"
+    elif kind == "performance":
+        warnings = db.query(StockOrderWarning).filter(StockOrderWarning.order_id.in_(order_ids or [-1])).order_by(StockOrderWarning.occurred_at).all()
+        rows = [["订单号","责任部门","预警类型","预警内容","截止时间","预警时间","详情"], *[[w.order_no,w.department,w.warning_type,w.message,w.threshold_at,w.occurred_at,w.detail] for w in warnings]]
+        filename = "备货订单绩效.csv"
+    elif kind == "changes":
+        query = db.query(StockOrderChangeLog).filter(StockOrderChangeLog.order_id.in_(order_ids or [-1]))
+        if operator:
+            query = query.filter(StockOrderChangeLog.operator_name.like(f"%{operator}%"))
+        logs = query.order_by(StockOrderChangeLog.operated_at).all()
+        rows = [["时间","订单号","模块","动作","字段","原内容","新内容","操作人","修改说明"], *[[x.operated_at,x.order_no,x.module,x.action,x.field_label,x.old_value,x.new_value,x.operator_name,x.reason] for x in logs]]
+        filename = "备货订单修改记录.csv"
+    else:
+        raise HTTPException(404, "导出类型不存在")
+    _log_activity(db, user, f"export_stock_{kind}", "stock-orders", f"导出 {len(orders)} 个订单")
+    return _csv_download(filename, rows)
 
 
 @app.get("/api/asset-ledger/state")
