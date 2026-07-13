@@ -809,6 +809,12 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
     today = business_date()
     for key, value in fields.items():
         module = FIELD_META[key][2]
+        old = getattr(order, key)
+        # Full-form and older cached clients may include unchanged fields from
+        # completed or unrelated modules. Only enforce module rules when the
+        # submitted value would actually change persisted data.
+        if old == value:
+            continue
         if not can_edit_module(user, module):
             raise HTTPException(403, f"当前角色不能修改{FIELD_META[key][0]}字段")
         if order.order_type == "留货订单" and module in {"purchase", "production", "qc"}:
@@ -816,9 +822,6 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         done_key = "sales_completed_at" if module == "sales" else next((values[1] for name, values in MODULES.items() if name == module), None)
         if done_key and getattr(order, done_key) and not is_admin(user):
             raise HTTPException(403, f"{FIELD_META[key][0]}已完成确认")
-        old = getattr(order, key)
-        if old == value:
-            continue
         if locks.get(key) and not is_admin(user):
             raise HTTPException(403, f"{FIELD_META[key][1]}已跨日锁定")
         if locks.get(key) and is_admin(user) and not payload.reason.strip():

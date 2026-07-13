@@ -962,7 +962,8 @@ function renderStockField([key,label,type]) {
   const module = STOCK_GROUPS.find(group => group[2].some(field => field[0] === key))?.[1] || "sales";
   const locked = stockCurrent.locks?.[key];
   const completed = module === "sales" ? stockCurrent.sales_completed_at : stockCurrent[`${module}_completed_at`];
-  const disabled = stockMode === "view" || !stockUser.permissions?.updateStockOrders || !stockCurrent.editableModules.includes(module) || (completed && !stockCurrent.isAdmin) || (locked && !stockCurrent.isAdmin) || stockCurrent.archive_status === "已取消";
+  const holdModule = stockCurrent.order_type === "留货订单" && module !== "sales";
+  const disabled = stockMode === "view" || holdModule || !stockUser.permissions?.updateStockOrders || !stockCurrent.editableModules.includes(module) || (completed && !stockCurrent.isAdmin) || (locked && !stockCurrent.isAdmin) || stockCurrent.archive_status === "已取消";
   if (stockMode === "view") {
     let shown = value || "—";
     if (type === "checkbox") shown = value ? "是" : "否";
@@ -1035,14 +1036,16 @@ function recognizeStockText(module) {
 
 function collectStockFields(form) {
   const fields = {};
-  STOCK_GROUPS.flatMap(group => group[2]).forEach(([key,,type]) => {
+  const isHoldOrder = form.elements.order_type?.value === "留货订单";
+  STOCK_GROUPS.forEach(([,module,moduleFields]) => moduleFields.forEach(([key,,type]) => {
+    if (isHoldOrder && module !== "sales") return;
     const input = form.elements[key];
     if (!input || input.disabled) return;
     fields[key] = type === "checkbox" ? input.checked : input.value;
-  });
+  }));
   const purchaseContainer = document.querySelector(".stock-purchase-items");
   const purchaseRows = [...document.querySelectorAll(".stock-purchase-row")].filter(row => !row.querySelector("input")?.disabled).map(row => ({material:row.querySelector("[data-purchase-material]").value.trim(), quantity:row.querySelector("[data-purchase-quantity]").value.trim()})).filter(x => x.material || x.quantity);
-  if (purchaseContainer?.dataset.disabled === "false" && stockMode === "edit" && (purchaseRows.length || stockCurrent.purchase_items)) fields.purchase_items = JSON.stringify(purchaseRows);
+  if (!isHoldOrder && purchaseContainer?.dataset.disabled === "false" && stockMode === "edit" && (purchaseRows.length || stockCurrent.purchase_items)) fields.purchase_items = JSON.stringify(purchaseRows);
   return fields;
 }
 
