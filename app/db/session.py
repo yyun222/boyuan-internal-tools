@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import os
-
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
-DEFAULT_DATABASE_URL = "mysql+pymysql://root:123123@127.0.0.1:3306/boyuan_internal_tools"
-DATABASE_URL = os.environ.get("BOYUAN_DATABASE_URL", DEFAULT_DATABASE_URL)
+from app.config import settings
+
+
+DATABASE_URL = settings.database_url
 
 
 def _create_database_if_needed(database_url: str) -> None:

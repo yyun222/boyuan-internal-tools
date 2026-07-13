@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import json
 import secrets
 import csv
 import io
 from html import escape
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from datetime import datetime, timedelta
 from urllib.parse import quote
@@ -17,7 +16,7 @@ from urllib.parse import quote
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -28,6 +27,7 @@ from app.auth import (
     utcnow,
     verify_password,
 )
+from app.config import settings
 from app.db import SessionLocal, engine, get_db, init_database
 from app.db.models import (
     ActivityLog, AssetLedgerAsset, AssetLedgerLog, Role, StockOrder,
@@ -44,18 +44,14 @@ APP_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = APP_DIR.parent
 STATIC_DIR = APP_DIR / "static"
 
-# In production, set BOYUAN_SESSION_SECRET via env. For local dev a random
-# per-process key is fine — sessions just don't survive a server restart.
-SESSION_SECRET = os.environ.get("BOYUAN_SESSION_SECRET") or secrets.token_urlsafe(32)
-
 app = FastAPI(title="Boyuan Internal Tools")
 app.add_middleware(
     SessionMiddleware,
-    secret_key=SESSION_SECRET,
+    secret_key=settings.session_secret,
     session_cookie="boyuan_session",
     same_site="lax",
-    https_only=False,  # set True behind HTTPS
-    max_age=8 * 60 * 60,
+    https_only=settings.session_cookie_secure,
+    max_age=settings.session_max_age_seconds,
 )
 init_database(engine, SessionLocal)
 
@@ -183,16 +179,13 @@ def _current_user(db: Session, request: Request) -> Optional[User]:
     except (TypeError, ValueError):
         request.session.clear()
         return None
-    if utcnow() - login_time >= timedelta(hours=8):
+    if utcnow() - login_time >= timedelta(seconds=settings.session_max_age_seconds):
         request.session.clear()
         return None
     user = db.get(User, user_id)
     if not user or not user.is_active or user.deleted_at is not None:
         request.session.clear()
         return None
-    user.last_activity_at = utcnow()
-    db.commit()
-    db.refresh(user)
     return user
 
 
@@ -238,13 +231,13 @@ class UserStatusPayload(BaseModel):
 
 
 class StockOrderPayload(BaseModel):
-    fields: dict
+    fields: dict[str, object]
     reason: str = ""
 
 
 class StockCompletePayload(BaseModel):
-    module: str
-    fields: dict = {}
+    module: Literal["sales", "purchase", "production", "qc"]
+    fields: dict[str, object] = Field(default_factory=dict)
 
 
 class StockCancelPayload(BaseModel):
@@ -745,6 +738,25 @@ def _stock_log(db: Session, order: StockOrder, user: User, module: str, action: 
     ))
 
 
+def _sync_stock_warnings(db: Session, orders: list[StockOrder]) -> dict[int, list[StockOrderWarning]]:
+    """Refresh warnings for many orders with a constant number of queries."""
+    if not orders:
+        return {}
+    order_ids = [order.id for order in orders]
+    existing_rows = db.query(StockOrderWarning).filter(StockOrderWarning.order_id.in_(order_ids)).all()
+    existing_types: dict[int, set[str]] = {order_id: set() for order_id in order_ids}
+    for row in existing_rows:
+        existing_types[row.order_id].add(row.warning_type)
+    for order in orders:
+        sync_order_warnings(db, order, existing_types=existing_types[order.id])
+    db.flush()
+    rows = db.query(StockOrderWarning).filter(StockOrderWarning.order_id.in_(order_ids)).order_by(StockOrderWarning.occurred_at).all()
+    grouped: dict[int, list[StockOrderWarning]] = {order_id: [] for order_id in order_ids}
+    for row in rows:
+        grouped[row.order_id].append(row)
+    return grouped
+
+
 @app.get("/api/stock-orders")
 async def api_stock_orders(request: Request, q: str = "", order_type: str = "", incomplete: str = "",
                            date_from: str = "", date_to: str = "", db: Session = Depends(get_db)):
@@ -760,20 +772,33 @@ async def api_stock_orders(request: Request, q: str = "", order_type: str = "", 
         query = query.filter(StockOrder.updated_at >= datetime.fromisoformat(date_from))
     if date_to:
         query = query.filter(StockOrder.updated_at < datetime.fromisoformat(date_to + "T23:59:59"))
-    rows = query.order_by(StockOrder.updated_at.desc(), StockOrder.id.desc()).limit(500).all()
     if incomplete:
         key = incomplete.lower()
-        rows = [row for row in rows if row.archive_status != "已取消" and (
-            (key in {"全部", "all"} and (not row.actual_delivery or any(not getattr(row, item[1]) for item in MODULES.values())))
-            or (key in {"采购", "purchase"} and not row.purchase_completed_at)
-            or (key in {"生产", "production"} and not row.production_completed_at)
-            or (key in {"qc", "质量"} and not row.qc_completed_at)
-            or (key in {"销售", "sales"} and not row.actual_delivery)
-        )]
-    for row in rows:
-        sync_order_warnings(db, row)
+        query = query.filter(StockOrder.archive_status != "已取消")
+        incomplete_filters = {
+            "purchase": StockOrder.purchase_completed_at.is_(None),
+            "采购": StockOrder.purchase_completed_at.is_(None),
+            "production": StockOrder.production_completed_at.is_(None),
+            "生产": StockOrder.production_completed_at.is_(None),
+            "qc": StockOrder.qc_completed_at.is_(None),
+            "质量": StockOrder.qc_completed_at.is_(None),
+            "sales": StockOrder.actual_delivery == "",
+            "销售": StockOrder.actual_delivery == "",
+        }
+        if key in {"全部", "all"}:
+            query = query.filter(or_(
+                StockOrder.actual_delivery == "",
+                StockOrder.purchase_completed_at.is_(None),
+                StockOrder.production_completed_at.is_(None),
+                StockOrder.qc_completed_at.is_(None),
+            ))
+        elif key in incomplete_filters:
+            query = query.filter(incomplete_filters[key])
+    rows = query.order_by(StockOrder.updated_at.desc(), StockOrder.id.desc()).limit(500).all()
+    warnings_by_order = _sync_stock_warnings(db, rows)
+    payloads = [order_payload(db, row, warning_rows=warnings_by_order[row.id]) for row in rows]
     db.commit()
-    return {"orders": [order_payload(db, row) for row in rows]}
+    return {"orders": payloads}
 
 
 @app.get("/api/stock-orders/{order_id}")
@@ -783,10 +808,11 @@ async def api_stock_order(order_id: int, request: Request, db: Session = Depends
     if not order:
         raise HTTPException(404, "订单不存在")
     sync_order_warnings(db, order)
-    db.commit()
+    db.flush()
     data = order_payload(db, order, include_locks=True)
     data["editableModules"] = sorted({module for module in {meta[2] for meta in FIELD_META.values()} if can_edit_module(user, module)})
     data["isAdmin"] = is_admin(user)
+    db.commit()
     return {"order": data}
 
 
@@ -849,7 +875,7 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         _stock_log(db, order, user, "all", "create" if is_new else "save", "新建订单" if is_new else "保存更新",
                    new_value="\n".join(changes), reason=payload.reason.strip())
     sync_order_warnings(db, order)
-    db.commit()
+    db.flush()
     db.refresh(order)
     return order
 
@@ -904,7 +930,6 @@ async def api_complete_stock_order(order_id: int, payload: StockCompletePayload,
         setattr(order, responded_field, utcnow())
     _stock_log(db, order, user, payload.module, "complete", "完成确认", new_value=label)
     sync_order_warnings(db, order)
-    db.commit()
     _log_activity(db, user, "complete_stock_order", "stock-orders", f"{order.order_no} · {label}")
     return {"ok": True, "order": order_payload(db, order, True)}
 
@@ -924,7 +949,6 @@ async def api_cancel_stock_order(order_id: int, payload: StockCancelPayload, req
     order.cancelled_reason = payload.reason.strip()
     order.updated_at = utcnow()
     _stock_log(db, order, user, "all", "cancel", "取消订单", "未归档", "已取消", payload.reason.strip())
-    db.commit()
     _log_activity(db, user, "cancel_stock_order", "stock-orders", order.order_no)
     return {"ok": True}
 
@@ -987,9 +1011,7 @@ async def api_stock_order_export(kind: str, request: Request, order: str = "", o
     if not is_admin(user):
         raise HTTPException(403, "只有管理员可以导出备货订单数据")
     orders = _stock_export_orders(db, order, operator, month)
-    for item in orders:
-        sync_order_warnings(db, item)
-    db.commit()
+    _sync_stock_warnings(db, orders)
     order_ids = [item.id for item in orders]
     if kind == "orders":
         rows = [["订单号","订单类型","创建时间","内部简称","CAS","数量","业务员","客户名称","提需求日期","交货期需求","实际交货","采购明细","采购预计到货","生产预计完成","QC预计完成","销售完成","采购完成","生产完成","QC完成","订单状态","取消原因"]]

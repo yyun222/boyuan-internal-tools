@@ -3,6 +3,7 @@
 from sqlalchemy import text
 
 from app.auth import hash_password, utcnow
+from app.config import settings
 from app.db.models import Base, Role, User
 
 DEPARTMENT_ROLES = [
@@ -91,9 +92,9 @@ def init_database(engine, session_factory) -> None:
         for role in db.query(Role).filter(Role.deleted_at.is_(None)).all():
             role.can_view_stock_orders = True
             role.can_update_stock_orders = True
-        root = db.query(User).filter(User.email == "root@boyuanpharm.com").one_or_none()
+        root = db.query(User).filter(User.email == settings.initial_admin_email).one_or_none()
         if root is None:
-            root = User(email="root@boyuanpharm.com", username="root", display_name="Root Admin", password_hash=hash_password("123123"), is_active=True, password_set_at=utcnow(), last_activity_at=utcnow(), roles=[admin])
+            root = User(email=settings.initial_admin_email, username="root", display_name="Root Admin", password_hash=hash_password(settings.initial_admin_password), is_active=True, password_set_at=utcnow(), last_activity_at=utcnow(), roles=[admin])
             db.add(root)
         elif admin not in root.roles:
             root.roles.append(admin)

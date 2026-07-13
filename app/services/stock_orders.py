@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from app.auth import utcnow
+from app.config import settings
 from app.db.models import StockOrder, StockOrderFieldUpdate, StockOrderWarning, User
 
 
@@ -51,7 +52,7 @@ DEPARTMENT_MODULE = {"销售部": "sales", "采购部": "purchase", "生产部":
 
 def business_date(value: datetime | None = None) -> str:
     """Return the China business date for naive UTC timestamps used by the app."""
-    return ((value or utcnow()) + timedelta(hours=8)).date().isoformat()
+    return ((value or utcnow()) + timedelta(hours=settings.business_utc_offset_hours)).date().isoformat()
 
 
 def user_modules(user: User) -> set[str]:
@@ -108,14 +109,18 @@ def overdue(order: StockOrder) -> dict[str, str]:
     return result
 
 
-def sync_order_warnings(db, order: StockOrder, now: datetime | None = None) -> None:
+def sync_order_warnings(
+    db,
+    order: StockOrder,
+    now: datetime | None = None,
+    existing_types: set[str] | None = None,
+) -> None:
     """Materialize each warning once so later performance exports remain auditable."""
     if order.archive_status == "已取消" or order.order_type == "留货订单":
         return
     now = now or utcnow()
-    existing = {
-        row.warning_type
-        for row in db.query(StockOrderWarning).filter_by(order_id=order.id).all()
+    existing = existing_types if existing_types is not None else {
+        row.warning_type for row in db.query(StockOrderWarning).filter_by(order_id=order.id).all()
     }
 
     def add(kind: str, department: str, message: str, threshold: datetime | None, detail: str = "") -> None:
@@ -157,7 +162,12 @@ def sync_order_warnings(db, order: StockOrder, now: datetime | None = None) -> N
             add(kind, department, message, datetime.fromisoformat(due), detail)
 
 
-def order_payload(db, order: StockOrder, include_locks: bool = False) -> dict:
+def order_payload(
+    db,
+    order: StockOrder,
+    include_locks: bool = False,
+    warning_rows: list[StockOrderWarning] | None = None,
+) -> dict:
     data = {key: getattr(order, key) for key in FIELD_META}
     for key in BOOLEAN_FIELDS:
         data[key] = bool(data[key])
@@ -177,7 +187,10 @@ def order_payload(db, order: StockOrder, include_locks: bool = False) -> dict:
         "warnings": [] if order.archive_status == "已取消" else [{
             "department": row.department, "type": row.warning_type,
             "message": row.message, "occurredAt": row.occurred_at.isoformat(),
-        } for row in db.query(StockOrderWarning).filter_by(order_id=order.id).order_by(StockOrderWarning.occurred_at).all()],
+        } for row in (
+            warning_rows if warning_rows is not None
+            else db.query(StockOrderWarning).filter_by(order_id=order.id).order_by(StockOrderWarning.occurred_at).all()
+        )],
     })
     if include_locks:
         data["locks"] = field_locks(db, order)
