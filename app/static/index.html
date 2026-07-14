@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Boyuan Internal Tools</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260714-joke-carousel-v14" />
+  <link rel="stylesheet" href="/static/style.css?v=20260714-fun-facts-v15" />
 </head>
 <body>
   <header class="topbar">
@@ -69,11 +69,16 @@
             <div class="home-timezone">北京时间 · Asia/Shanghai</div>
             <div id="home-holiday-countdown" class="home-holiday-countdown hidden"></div>
           </div>
-          <div class="home-jokes" id="home-jokes">
-            <article class="home-joke"><span id="home-joke-number">今日一笑 · 1 / 10</span><p id="home-joke-text">正在准备笑话…</p></article>
-            <button id="home-next-joke" class="home-next-joke" type="button">下一个</button>
+          <div class="home-facts" id="home-fun-facts">
+            <button id="home-prev-fun-fact" class="home-fact-arrow" type="button" aria-label="上一条趣味知识">←</button>
+            <article class="home-fact">
+              <span id="home-fun-fact-number">趣味知识</span>
+              <p id="home-fun-fact-english" class="home-fact-english">Fun facts loading...</p>
+              <p id="home-fun-fact-chinese" class="home-fact-chinese">趣味知识生成中...</p>
+            </article>
+            <button id="home-next-fun-fact" class="home-fact-arrow" type="button" aria-label="下一条趣味知识">→</button>
           </div>
-          <a class="home-joke-source" href="https://huggingface.co/datasets/ZhenghanYU/CFunSet" target="_blank" rel="noopener noreferrer">笑话来源：CFunSet</a>
+          <a class="home-fact-source" href="https://factfacts.com" target="_blank" rel="noopener noreferrer">内容来源：FactFacts.com</a>
         </div>
       </section>
 
@@ -324,6 +329,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260714-joke-fetch-v15"></script>
+  <script src="/static/app.js?v=20260714-bilingual-facts-v20"></script>
 </body>
 </html>

@@ -47,28 +47,9 @@ APP_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = APP_DIR.parent
 STATIC_DIR = APP_DIR / "static"
 
-HOME_JOKE_FALLBACKS = (
-    "老板问我为什么迟到，我说路上堵车。老板看了看空荡荡的停车场：你走路也堵？",
-    "我给闹钟放了一天假，结果第二天我们两个都迟到了。",
-    "朋友问我存款有几位数，我说要看小数点后面算不算。",
-    "医生让我少熬夜，我听进去了，所以改成了通宵。",
-    "我最大的优点是记性好，至于其他优点，我一时想不起来。",
-    "电脑说需要休息一下，于是我替它关机，自己继续加班。",
-    "减肥最有效的方法是把体重秤调成公斤，再假装以前显示的是斤。",
-    "同事问我工作完成了吗？我说完成了一半：已经开始焦虑了。",
-    "我问老板加班有没有补偿，老板说有啊，补偿你更多工作经验。",
-    "为了证明我不是拖延症，我决定明天就开始改。",
-    "手机电量只剩百分之一时，我突然理解了什么叫生命倒计时。",
-    "我每天都坚持早起，只是起床这件事通常发生在中午。",
-)
-CFUN_ROWS_URL = "https://datasets-server.huggingface.co/rows"
-CFUN_RAW_URL = "https://huggingface.co/datasets/ZhenghanYU/CFunSet/resolve/main/CFunSet.json"
-CFUN_RAW_SIZE = 218_997_952
-CFUN_RANGE_SIZE = 256 * 1024
-# CFunSet is ordered by task; the opening region contains its Chumor joke samples.
-CFUN_JOKE_REGION_SIZE = 1_200_000
-HOME_JOKES_VERSION = 2
 HOLIDAY_API = "https://api.jiejiariapi.com/v1/holidays/{year}"
+FUN_FACTS_API = "https://factfacts.com/api.php?count=10"
+TRANSLATION_API = "https://apis.uctb.cn/api/qqfy"
 
 logger = logging.getLogger(__name__)
 
@@ -240,117 +221,6 @@ def _log_activity(db: Session, user: User, action: str, target: str, detail: str
 class LoginPayload(BaseModel):
     username: str
     password: str
-
-
-def _clean_home_joke(value: object) -> str:
-    text = " ".join(str(value or "").replace("\r", "\n").split())
-    for prefix in ("标题：", "标题:", "笑话：", "笑话:"):
-        if text.startswith(prefix):
-            text = text[len(prefix):].strip()
-    return text[:240]
-
-
-def _extract_cfun_jokes(payload: dict) -> list[str]:
-    jokes = []
-    for item in payload.get("rows", []):
-        row = item.get("row", {}) if isinstance(item, dict) else {}
-        instruction = str(row.get("instruction") or "")
-        input_text = _clean_home_joke(row.get("input"))
-        output_text = _clean_home_joke(row.get("output"))
-        if "幽默的原因" in instruction or "分析" in instruction and "幽默" in instruction:
-            candidate = input_text
-        elif "笑话" in instruction and any(word in instruction for word in ("生成", "续写", "补全")):
-            candidate = output_text or input_text
-        else:
-            continue
-        if 6 <= len(candidate) <= 240 and candidate not in jokes and not candidate.startswith("这个笑话的幽默"):
-            jokes.append(candidate)
-    return jokes
-
-
-def _extract_cfun_range(chunk: bytes) -> list[dict]:
-    """Extract complete JSON objects from a byte range within CFunSet.json."""
-    text = chunk.decode("utf-8", errors="ignore")
-    decoder = json.JSONDecoder()
-    rows = []
-    cursor = 0
-    while len(rows) < 30:
-        start = text.find("{", cursor)
-        if start < 0:
-            break
-        try:
-            row, end = decoder.raw_decode(text, start)
-        except json.JSONDecodeError:
-            cursor = start + 1
-            continue
-        cursor = end
-        if isinstance(row, dict) and {"instruction", "input", "output"}.issubset(row):
-            rows.append({"row": row})
-    return rows
-
-
-def _fetch_cfun_rows_api() -> list[str]:
-    offset = secrets.randbelow(164_001)
-    query = urlencode({
-        "dataset": "ZhenghanYU/CFunSet", "config": "default", "split": "train",
-        "offset": offset, "length": 20,
-    })
-    request = UrlRequest(
-        f"{CFUN_ROWS_URL}?{query}",
-        headers={"User-Agent": "boyuan-internal-tools/1.0"},
-    )
-    with urlopen(request, timeout=5) as response:
-        return _extract_cfun_jokes(json.load(response))
-
-
-def _fetch_cfun_raw_range() -> list[str]:
-    jokes = []
-    for _ in range(2):
-        # Leave room for a complete trailing record and avoid the JSON array prefix.
-        start = 1 + secrets.randbelow(CFUN_JOKE_REGION_SIZE - CFUN_RANGE_SIZE - 1)
-        request = UrlRequest(CFUN_RAW_URL, headers={
-            "User-Agent": "boyuan-internal-tools/1.0",
-            "Range": f"bytes={start}-{start + CFUN_RANGE_SIZE - 1}",
-            "Accept-Encoding": "identity",
-        })
-        with urlopen(request, timeout=10) as response:
-            chunk = response.read(CFUN_RANGE_SIZE + 1)
-        if len(chunk) > CFUN_RANGE_SIZE:
-            raise ValueError("CFunSet server ignored the byte-range request")
-        for joke in _extract_cfun_jokes({"rows": _extract_cfun_range(chunk)}):
-            if joke not in jokes:
-                jokes.append(joke)
-        if len(jokes) >= 10:
-            break
-    if not jokes:
-        raise ValueError("No suitable jokes found in CFunSet byte ranges")
-    return jokes
-
-
-def _fetch_cfun_jokes() -> list[str]:
-    try:
-        jokes = _fetch_cfun_rows_api()
-        if jokes:
-            return jokes
-    except Exception as exc:
-        logger.warning("CFunSet rows API unavailable, trying raw range: %s", exc)
-    return _fetch_cfun_raw_range()
-
-
-async def _new_home_jokes(exclude: list[str] | None = None) -> list[str]:
-    try:
-        candidates = await asyncio.to_thread(_fetch_cfun_jokes)
-    except Exception as exc:
-        logger.warning("Unable to fetch CFunSet jokes; using local fallbacks: %s", exc)
-        candidates = []
-    excluded = set(exclude or [])
-    jokes = [joke for joke in candidates if joke not in excluded]
-    fallbacks = [joke for joke in HOME_JOKE_FALLBACKS if joke not in excluded and joke not in jokes]
-    secrets.SystemRandom().shuffle(fallbacks)
-    jokes.extend(fallbacks)
-    if len(jokes) < 10:
-        jokes.extend(joke for joke in HOME_JOKE_FALLBACKS if joke not in jokes)
-    return jokes[:10]
 
 
 def _fetch_holiday_year(year: int) -> list[dict]:
@@ -642,26 +512,18 @@ async def api_login(payload: LoginPayload, request: Request, db: Session = Depen
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     user.last_activity_at = utcnow()
-    previous_jokes = request.session.get("previous_home_jokes") or request.session.get("home_jokes")
     request.session["user_id"] = user.id
     request.session["authenticated_at"] = utcnow().isoformat()
     _log_activity(db, user, "login", "auth", "用户登录")
-    home_jokes = await _new_home_jokes(previous_jokes if isinstance(previous_jokes, list) else None)
-    request.session["home_jokes"] = home_jokes
-    request.session["home_jokes_version"] = HOME_JOKES_VERSION
-    request.session.pop("previous_home_jokes", None)
-    return {"ok": True, "user": _user_payload(user), "homeJokes": home_jokes}
+    return {"ok": True, "user": _user_payload(user)}
 
 
 @app.post("/api/logout")
 async def api_logout(request: Request, db: Session = Depends(get_db)):
     user = _current_user(db, request)
-    previous_jokes = request.session.get("home_jokes")
     if user:
         _log_activity(db, user, "logout", "auth", "用户退出登录")
     request.session.clear()
-    if isinstance(previous_jokes, list):
-        request.session["previous_home_jokes"] = previous_jokes
     return {"ok": True}
 
 
@@ -671,16 +533,54 @@ async def api_me(request: Request, db: Session = Depends(get_db)):
     return {"user": _user_payload(user)}
 
 
-@app.get("/api/home-jokes")
-async def api_home_jokes(request: Request, db: Session = Depends(get_db)):
+def _fetch_fun_facts() -> list[dict]:
+    request = UrlRequest(FUN_FACTS_API, headers={"User-Agent": "boyuan-internal-tools/1.0"})
+    with urlopen(request, timeout=10) as response:
+        payload = json.load(response)
+    facts = payload.get("facts", []) if isinstance(payload, dict) else []
+    if payload.get("ok") is not True or not isinstance(facts, list) or not facts:
+        raise ValueError("FactFacts API returned no facts")
+    return [fact for fact in facts if isinstance(fact, dict) and fact.get("text")][:10]
+
+
+def _translate_fun_fact(text: str) -> str:
+    query = urlencode({
+        "ckey": settings.translation_api_key,
+        "encoding": "json",
+        "text": text,
+    })
+    request = UrlRequest(
+        f"{TRANSLATION_API}?{query}",
+        headers={"User-Agent": "boyuan-internal-tools/1.0"},
+    )
+    with urlopen(request, timeout=10) as response:
+        payload = json.load(response)
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    result = data.get("result") if isinstance(data, dict) else None
+    if payload.get("code") != 200 or not result:
+        raise ValueError("Translation API returned no result")
+    return str(result)
+
+
+@app.get("/api/fun-facts")
+async def api_fun_facts(request: Request, db: Session = Depends(get_db)):
     _require_user(request, db)
-    jokes = request.session.get("home_jokes")
-    if (not isinstance(jokes, list) or len(jokes) != 10
-            or request.session.get("home_jokes_version") != HOME_JOKES_VERSION):
-        jokes = await _new_home_jokes()
-        request.session["home_jokes"] = jokes
-        request.session["home_jokes_version"] = HOME_JOKES_VERSION
-    return {"jokes": jokes}
+    try:
+        facts = await asyncio.to_thread(_fetch_fun_facts)
+        translations = await asyncio.gather(*(
+            asyncio.to_thread(_translate_fun_fact, str(fact["text"])) for fact in facts
+        ))
+        return {"facts": [
+            {
+                "english": str(fact["text"]),
+                "chinese": translated,
+                "category": str(fact.get("category") or ""),
+            }
+            for fact, translated in zip(facts, translations)
+        ]}
+    except Exception as exc:
+        logger.warning("Unable to fetch or translate fun facts: %s", exc)
+        raise HTTPException(503, "暂时无法获取趣味知识") from exc
 
 
 @app.get("/api/next-holiday")

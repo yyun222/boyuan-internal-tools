@@ -278,13 +278,18 @@ body.sidebar-open .sidebar-overlay {
 .home-time { display:block; margin:8px 0 0; font-size:clamp(64px,12vw,168px); font-weight:650; line-height:1; letter-spacing:-.055em; font-variant-numeric:tabular-nums; }
 .home-timezone { margin-top:14px; color:#86868b; font-size:13px; letter-spacing:.06em; }
 .home-holiday-countdown { margin-top:13px; color:#515154; font-size:16px; font-weight:500; }
-.home-jokes { width:min(760px,100%); display:flex; align-items:stretch; gap:12px; }
-.home-joke { flex:1; margin:0; min-height:142px; padding:24px 26px; background:#fff; border:1px solid rgba(0,0,0,.06); border-radius:18px; box-shadow:0 8px 24px rgba(0,0,0,.04); text-align:left; }
-.home-joke span { color:#86868b; font-size:12px; letter-spacing:.08em; }
-.home-joke p { margin:13px 0 0; color:#1d1d1f; font-size:18px; line-height:1.75; }
-.home-next-joke { align-self:center; flex:0 0 auto; background:#1d1d1f; color:#fff; }
-.home-joke-source { color:#86868b; font-size:12px; text-decoration:none; }
-.home-joke-source:hover { color:#1d1d1f; text-decoration:underline; }
+.home-facts { width:min(760px,100%); display:flex; align-items:stretch; gap:12px; }
+#home-fun-facts { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; }
+.home-fact { flex:1; margin:0; min-height:142px; padding:24px 26px; background:#fff; border:1px solid rgba(0,0,0,.06); border-radius:18px; box-shadow:0 8px 24px rgba(0,0,0,.04); text-align:left; }
+.home-fact span { color:#86868b; font-size:12px; letter-spacing:.08em; }
+.home-fact p { margin:13px 0 0; color:#1d1d1f; font-size:18px; line-height:1.75; white-space:pre-line; }
+.home-fact .home-fact-english { font-size:19px; line-height:1.65; }
+.home-fact .home-fact-chinese { margin-top:10px; color:#515154; font-size:17px; line-height:1.7; }
+.home-fact-arrow { align-self:center; flex:0 0 auto; padding:10px; border:0; background:transparent; color:#86868b; font-size:30px; font-weight:400; line-height:1; box-shadow:none; }
+.home-fact-arrow:hover { background:transparent; color:#515154; transform:scale(1.08); }
+.home-fact-arrow:disabled { color:#d2d2d7; }
+.home-fact-source { color:#86868b; font-size:12px; text-decoration:none; }
+.home-fact-source:hover { color:#1d1d1f; text-decoration:underline; }
 
 /* ----- Cards (floating, Apple-style) ----- */
 .card {
@@ -1026,10 +1031,10 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
   .content { padding: 16px 14px; }
   .home-shell { min-height:calc(100vh - 96px); gap:26px; }
   .home-time { font-size:clamp(54px,18vw,90px); }
-  .home-jokes { flex-direction:column; gap:12px; }
-  .home-joke { min-height:0; padding:19px 20px; }
-  .home-joke p { font-size:16px; }
-  .home-next-joke { align-self:flex-end; }
+  .home-facts { flex-direction:column; gap:12px; }
+  .home-fact { min-height:0; padding:19px 20px; }
+  .home-fact p { font-size:16px; }
+  .home-fact-arrow { align-self:center; }
   .view-header h1 { font-size: 22px; }
   .view-desc { font-size: 13px; }
   .card { padding: 18px 16px; border-radius: 14px; }

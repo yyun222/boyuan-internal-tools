@@ -13,8 +13,8 @@ const beijingDateFormatter = new Intl.DateTimeFormat("zh-CN", {
 const beijingTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone:"Asia/Shanghai", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false,
 });
-let homeJokes = [];
-let homeJokeIndex = 0;
+let homeFunFacts = [];
+let homeFunFactIndex = 0;
 
 function updateHomeClock() {
   const now = new Date();
@@ -25,30 +25,34 @@ function updateHomeClock() {
   }
 }
 
-function renderHomeJokes(jokes) {
-  homeJokes = Array.isArray(jokes) && jokes.length ? jokes : ["今天先笑一笑，烦恼稍后再处理。"];
-  homeJokeIndex = 0;
-  showHomeJoke();
+function renderHomeFunFacts(facts) {
+  homeFunFacts = Array.isArray(facts) ? facts : [];
+  homeFunFactIndex = 0;
+  showHomeFunFact();
 }
 
-function showHomeJoke() {
-  $("#home-joke-text").textContent = homeJokes[homeJokeIndex] || "";
-  $("#home-joke-number").textContent = `今日一笑 · ${homeJokeIndex + 1} / ${homeJokes.length}`;
+function showHomeFunFact() {
+  const fact = homeFunFacts[homeFunFactIndex];
+  if (!fact) return;
+  $("#home-fun-fact-english").textContent = fact.english || "";
+  $("#home-fun-fact-chinese").textContent = fact.chinese || "";
+  $("#home-fun-fact-number").textContent = `趣味知识 · ${homeFunFactIndex + 1} / ${homeFunFacts.length}`;
 }
 
-async function loadHomeJokes() {
+async function loadHomeFunFacts() {
   try {
-    const cached = JSON.parse(sessionStorage.getItem("boyuan_home_jokes_v2") || "[]");
-    if (Array.isArray(cached) && cached.length === 10) { renderHomeJokes(cached); return; }
+    const cached = JSON.parse(sessionStorage.getItem("boyuan_fun_facts_v2") || "[]");
+    if (Array.isArray(cached) && cached.length === 10) { renderHomeFunFacts(cached); return; }
   } catch (_) {}
   try {
-    const response = await fetch("/api/home-jokes", {cache:"no-store"});
-    if (!response.ok) throw new Error("笑话加载失败");
+    const response = await fetch("/api/fun-facts", {cache:"no-store"});
+    if (!response.ok) throw new Error("趣味知识加载失败");
     const data = await response.json();
-    sessionStorage.setItem("boyuan_home_jokes_v2", JSON.stringify(data.jokes || []));
-    renderHomeJokes(data.jokes || []);
+    sessionStorage.setItem("boyuan_fun_facts_v2", JSON.stringify(data.facts || []));
+    renderHomeFunFacts(data.facts);
   } catch (_) {
-    renderHomeJokes([]);
+    $("#home-fun-fact-english").textContent = "Fun facts are temporarily unavailable.";
+    $("#home-fun-fact-chinese").textContent = "暂时无法获取趣味知识，请稍后再试。";
   }
 }
 
@@ -72,10 +76,15 @@ async function loadNextHoliday() {
 
 updateHomeClock();
 setInterval(updateHomeClock, 1000);
-$("#home-next-joke")?.addEventListener("click", () => {
-  if (!homeJokes.length) return;
-  homeJokeIndex = (homeJokeIndex + 1) % homeJokes.length;
-  showHomeJoke();
+$("#home-prev-fun-fact")?.addEventListener("click", () => {
+  if (!homeFunFacts.length) return;
+  homeFunFactIndex = (homeFunFactIndex - 1 + homeFunFacts.length) % homeFunFacts.length;
+  showHomeFunFact();
+});
+$("#home-next-fun-fact")?.addEventListener("click", () => {
+  if (!homeFunFacts.length) return;
+  homeFunFactIndex = (homeFunFactIndex + 1) % homeFunFacts.length;
+  showHomeFunFact();
 });
 
 // --- Auth: reuse the permission snapshot returned by login. Direct visits and
@@ -102,7 +111,7 @@ currentUserRequest.then((d) => {
     sessionStorage.setItem("boyuan_current_user", JSON.stringify(d.user));
     $("#current-user").textContent = d.user.email || d.user.username || "";
     applyPermissions(d.user);
-    loadHomeJokes();
+    loadHomeFunFacts();
     loadNextHoliday();
     if (d.user.permissions?.manageUsers) {
       loadRoles();
@@ -118,8 +127,8 @@ currentUserRequest.then((d) => {
 $("#logout-btn").addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });
   sessionStorage.removeItem("boyuan_current_user");
-  sessionStorage.removeItem("boyuan_home_jokes");
-  sessionStorage.removeItem("boyuan_home_jokes_v2");
+  sessionStorage.removeItem("boyuan_fun_facts_v1");
+  sessionStorage.removeItem("boyuan_fun_facts_v2");
   window.location.href = "/login";
 });
 
