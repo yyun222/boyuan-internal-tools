@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 import csv
@@ -10,8 +11,9 @@ from html import escape
 from pathlib import Path
 from typing import Literal, Optional
 
-from datetime import datetime, timedelta
-from urllib.parse import quote
+from datetime import date, datetime, timedelta
+from urllib.parse import quote, urlencode
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -43,6 +45,22 @@ from app.services.reconcile import reconcile
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = APP_DIR.parent
 STATIC_DIR = APP_DIR / "static"
+
+HOME_JOKE_FALLBACKS = (
+    "老板问我为什么迟到，我说路上堵车。老板看了看空荡荡的停车场：你走路也堵？",
+    "我给闹钟放了一天假，结果第二天我们两个都迟到了。",
+    "朋友问我存款有几位数，我说要看小数点后面算不算。",
+    "医生让我少熬夜，我听进去了，所以改成了通宵。",
+    "我最大的优点是记性好，至于其他优点，我一时想不起来。",
+    "电脑说需要休息一下，于是我替它关机，自己继续加班。",
+    "减肥最有效的方法是把体重秤调成公斤，再假装以前显示的是斤。",
+    "同事问我工作完成了吗？我说完成了一半：已经开始焦虑了。",
+    "我问老板加班有没有补偿，老板说有啊，补偿你更多工作经验。",
+    "为了证明我不是拖延症，我决定明天就开始改。",
+    "手机电量只剩百分之一时，我突然理解了什么叫生命倒计时。",
+    "我每天都坚持早起，只是起床这件事通常发生在中午。",
+)
+HOLIDAY_API = "https://api.jiejiariapi.com/v1/holidays/{year}"
 
 app = FastAPI(title="Boyuan Internal Tools")
 app.add_middleware(
@@ -212,6 +230,92 @@ def _log_activity(db: Session, user: User, action: str, target: str, detail: str
 class LoginPayload(BaseModel):
     username: str
     password: str
+
+
+def _clean_home_joke(value: object) -> str:
+    text = " ".join(str(value or "").replace("\r", "\n").split())
+    for prefix in ("标题：", "标题:", "笑话：", "笑话:"):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    return text[:240]
+
+
+def _extract_cfun_jokes(payload: dict) -> list[str]:
+    jokes = []
+    for item in payload.get("rows", []):
+        row = item.get("row", {}) if isinstance(item, dict) else {}
+        instruction = str(row.get("instruction") or "")
+        input_text = _clean_home_joke(row.get("input"))
+        output_text = _clean_home_joke(row.get("output"))
+        if "幽默的原因" in instruction or "分析" in instruction and "幽默" in instruction:
+            candidate = input_text
+        elif any(word in instruction for word in ("生成", "续写", "补全", "笑话")):
+            candidate = output_text or input_text
+        else:
+            candidate = input_text or output_text
+        if 6 <= len(candidate) <= 240 and candidate not in jokes and not candidate.startswith("这个笑话的幽默"):
+            jokes.append(candidate)
+    return jokes
+
+
+def _fetch_cfun_jokes() -> list[str]:
+    offset = secrets.randbelow(164_001)
+    query = urlencode({
+        "dataset": "ZhenghanYU/CFunSet", "config": "default", "split": "train",
+        "offset": offset, "length": 10,
+    })
+    request = UrlRequest(
+        f"https://datasets-server.huggingface.co/rows?{query}",
+        headers={"User-Agent": "boyuan-internal-tools/1.0"},
+    )
+    with urlopen(request, timeout=3) as response:
+        return _extract_cfun_jokes(json.load(response))
+
+
+async def _new_home_jokes(exclude: list[str] | None = None) -> list[str]:
+    try:
+        candidates = await asyncio.to_thread(_fetch_cfun_jokes)
+    except Exception:
+        candidates = []
+    excluded = set(exclude or [])
+    jokes = [joke for joke in candidates if joke not in excluded]
+    fallbacks = [joke for joke in HOME_JOKE_FALLBACKS if joke not in excluded and joke not in jokes]
+    secrets.SystemRandom().shuffle(fallbacks)
+    jokes.extend(fallbacks)
+    if len(jokes) < 10:
+        jokes.extend(joke for joke in HOME_JOKE_FALLBACKS if joke not in jokes)
+    return jokes[:10]
+
+
+def _fetch_holiday_year(year: int) -> list[dict]:
+    request = UrlRequest(HOLIDAY_API.format(year=year), headers={"User-Agent": "boyuan-internal-tools/1.0"})
+    with urlopen(request, timeout=3) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict):
+        raise ValueError("节假日 API 返回格式无效")
+    return [row for row in payload.values() if isinstance(row, dict) and row.get("isOffDay") is True]
+
+
+async def _holiday_rows(year: int) -> list[dict]:
+    try:
+        return await asyncio.to_thread(_fetch_holiday_year, year)
+    except Exception:
+        return []
+
+
+def _next_statutory_holiday(today: date, rows: list[dict]) -> dict | None:
+    candidates = []
+    for row in rows:
+        try:
+            holiday_date = date.fromisoformat(str(row.get("date") or ""))
+        except ValueError:
+            continue
+        if row.get("isOffDay") is True and holiday_date >= today:
+            candidates.append((holiday_date, str(row.get("name") or "法定节假日")))
+    if not candidates:
+        return None
+    holiday_date, name = min(candidates)
+    return {"name": name, "date": holiday_date.isoformat(), "days": (holiday_date - today).days}
 
 
 class InvitePayload(BaseModel):
@@ -472,18 +576,25 @@ async def api_login(payload: LoginPayload, request: Request, db: Session = Depen
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     user.last_activity_at = utcnow()
+    previous_jokes = request.session.get("previous_home_jokes") or request.session.get("home_jokes")
     request.session["user_id"] = user.id
     request.session["authenticated_at"] = utcnow().isoformat()
     _log_activity(db, user, "login", "auth", "用户登录")
-    return {"ok": True, "user": _user_payload(user)}
+    home_jokes = await _new_home_jokes(previous_jokes if isinstance(previous_jokes, list) else None)
+    request.session["home_jokes"] = home_jokes
+    request.session.pop("previous_home_jokes", None)
+    return {"ok": True, "user": _user_payload(user), "homeJokes": home_jokes}
 
 
 @app.post("/api/logout")
 async def api_logout(request: Request, db: Session = Depends(get_db)):
     user = _current_user(db, request)
+    previous_jokes = request.session.get("home_jokes")
     if user:
         _log_activity(db, user, "logout", "auth", "用户退出登录")
     request.session.clear()
+    if isinstance(previous_jokes, list):
+        request.session["previous_home_jokes"] = previous_jokes
     return {"ok": True}
 
 
@@ -491,6 +602,26 @@ async def api_logout(request: Request, db: Session = Depends(get_db)):
 async def api_me(request: Request, db: Session = Depends(get_db)):
     user = _require_user(request, db)
     return {"user": _user_payload(user)}
+
+
+@app.get("/api/home-jokes")
+async def api_home_jokes(request: Request, db: Session = Depends(get_db)):
+    _require_user(request, db)
+    jokes = request.session.get("home_jokes")
+    if not isinstance(jokes, list) or len(jokes) != 10:
+        jokes = await _new_home_jokes()
+        request.session["home_jokes"] = jokes
+    return {"jokes": jokes}
+
+
+@app.get("/api/next-holiday")
+async def api_next_holiday(request: Request, db: Session = Depends(get_db)):
+    _require_user(request, db)
+    today = date.fromisoformat(business_date())
+    holiday = _next_statutory_holiday(today, await _holiday_rows(today.year))
+    if holiday is None:
+        raise HTTPException(503, "暂时无法获取下一法定节假日")
+    return {"holiday": holiday}
 
 
 @app.get("/api/roles")

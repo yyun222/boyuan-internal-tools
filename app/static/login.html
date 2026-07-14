@@ -49,6 +49,7 @@
           throw new Error(err.detail || "登录失败");
         }
         sessionStorage.setItem("boyuan_current_user", JSON.stringify(data.user));
+        sessionStorage.setItem("boyuan_home_jokes", JSON.stringify(data.homeJokes || []));
         window.location.href = "/";
       } catch (err) {
         errEl.textContent = err.message || String(err);

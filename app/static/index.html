@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Boyuan Internal Tools</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260714-stock-sort-v10" />
+  <link rel="stylesheet" href="/static/style.css?v=20260714-joke-carousel-v14" />
 </head>
 <body>
   <header class="topbar">
@@ -27,7 +27,17 @@
       <button id="sidebar-collapse-btn" class="sidebar-collapse-btn" type="button" aria-label="隐藏左侧菜单" title="隐藏左侧菜单">←</button>
       <nav>
         <ul>
-          <li class="nav-item active" data-view="reconcile">
+          <li class="nav-item active" data-view="home">
+            <span class="nav-icon">⌂</span>
+            <span class="nav-label">主页</span>
+          </li>
+
+          <li class="nav-item" id="stock-orders-nav" data-view="stock-orders">
+            <span class="nav-icon">📦</span>
+            <span class="nav-label">备货订单跟进</span>
+          </li>
+
+          <li class="nav-item" data-view="reconcile">
             <span class="nav-icon">📊</span>
             <span class="nav-label">原料库存对账</span>
           </li>
@@ -35,11 +45,6 @@
           <li class="nav-item" id="asset-ledger-nav" data-view="asset-ledger">
             <span class="nav-icon">🏷️</span>
             <span class="nav-label">固定资产台账</span>
-          </li>
-
-          <li class="nav-item" id="stock-orders-nav" data-view="stock-orders">
-            <span class="nav-icon">📦</span>
-            <span class="nav-label">备货订单跟进</span>
           </li>
 
           <li class="nav-item hidden" data-view="admin" id="admin-nav">
@@ -56,7 +61,23 @@
     </aside>
 
     <main class="content">
-      <section id="view-reconcile" class="view active">
+      <section id="view-home" class="view active">
+        <div class="home-shell">
+          <div class="home-clock" aria-live="off">
+            <div id="home-date" class="home-date"></div>
+            <time id="home-time" class="home-time"></time>
+            <div class="home-timezone">北京时间 · Asia/Shanghai</div>
+            <div id="home-holiday-countdown" class="home-holiday-countdown hidden"></div>
+          </div>
+          <div class="home-jokes" id="home-jokes">
+            <article class="home-joke"><span id="home-joke-number">今日一笑 · 1 / 10</span><p id="home-joke-text">正在准备笑话…</p></article>
+            <button id="home-next-joke" class="home-next-joke" type="button">下一个</button>
+          </div>
+          <a class="home-joke-source" href="https://huggingface.co/datasets/ZhenghanYU/CFunSet" target="_blank" rel="noopener noreferrer">笑话来源：CFunSet</a>
+        </div>
+      </section>
+
+      <section id="view-reconcile" class="view">
         <div class="view-header">
           <h1>原料库存对账</h1>
           <p class="view-desc">上传三份 Excel 文件，自动比对仓库余额与财务系统库存</p>
@@ -303,6 +324,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260714-stock-sort-v10"></script>
+  <script src="/static/app.js?v=20260714-joke-carousel-v14"></script>
 </body>
 </html>

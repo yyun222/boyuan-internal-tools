@@ -7,6 +7,77 @@ const resultsEl = $("#results");
 let lastResult = null;
 let currentUser = null;
 
+const beijingDateFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit", weekday:"long",
+});
+const beijingTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone:"Asia/Shanghai", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false,
+});
+let homeJokes = [];
+let homeJokeIndex = 0;
+
+function updateHomeClock() {
+  const now = new Date();
+  if ($("#home-date")) $("#home-date").textContent = beijingDateFormatter.format(now);
+  if ($("#home-time")) {
+    $("#home-time").textContent = beijingTimeFormatter.format(now);
+    $("#home-time").dateTime = now.toISOString();
+  }
+}
+
+function renderHomeJokes(jokes) {
+  homeJokes = Array.isArray(jokes) && jokes.length ? jokes : ["今天先笑一笑，烦恼稍后再处理。"];
+  homeJokeIndex = 0;
+  showHomeJoke();
+}
+
+function showHomeJoke() {
+  $("#home-joke-text").textContent = homeJokes[homeJokeIndex] || "";
+  $("#home-joke-number").textContent = `今日一笑 · ${homeJokeIndex + 1} / ${homeJokes.length}`;
+}
+
+async function loadHomeJokes() {
+  try {
+    const cached = JSON.parse(sessionStorage.getItem("boyuan_home_jokes") || "[]");
+    if (Array.isArray(cached) && cached.length === 10) { renderHomeJokes(cached); return; }
+  } catch (_) {}
+  try {
+    const response = await fetch("/api/home-jokes", {cache:"no-store"});
+    if (!response.ok) throw new Error("笑话加载失败");
+    const data = await response.json();
+    sessionStorage.setItem("boyuan_home_jokes", JSON.stringify(data.jokes || []));
+    renderHomeJokes(data.jokes || []);
+  } catch (_) {
+    renderHomeJokes([]);
+  }
+}
+
+async function loadNextHoliday() {
+  const target = $("#home-holiday-countdown");
+  if (!target) return;
+  try {
+    const response = await fetch("/api/next-holiday", {cache:"no-store"});
+    if (!response.ok) throw new Error("节假日加载失败");
+    const data = await response.json();
+    const holiday = data.holiday;
+    target.classList.remove("hidden");
+    target.textContent = holiday.days === 0
+      ? `今天是法定节假日「${holiday.name}」`
+      : `距离下一个法定节假日「${holiday.name}」还剩 ${holiday.days} 天`;
+  } catch (_) {
+    target.textContent = "";
+    target.classList.add("hidden");
+  }
+}
+
+updateHomeClock();
+setInterval(updateHomeClock, 1000);
+$("#home-next-joke")?.addEventListener("click", () => {
+  if (!homeJokes.length) return;
+  homeJokeIndex = (homeJokeIndex + 1) % homeJokes.length;
+  showHomeJoke();
+});
+
 // --- Auth: reuse the permission snapshot returned by login. Direct visits and
 // new tabs fall back to one /api/me request; backend authorization remains live.
 const cachedLoginUser = (() => {
@@ -31,6 +102,8 @@ currentUserRequest.then((d) => {
     sessionStorage.setItem("boyuan_current_user", JSON.stringify(d.user));
     $("#current-user").textContent = d.user.email || d.user.username || "";
     applyPermissions(d.user);
+    loadHomeJokes();
+    loadNextHoliday();
     if (d.user.permissions?.manageUsers) {
       loadRoles();
       loadUsers();
@@ -45,6 +118,7 @@ currentUserRequest.then((d) => {
 $("#logout-btn").addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });
   sessionStorage.removeItem("boyuan_current_user");
+  sessionStorage.removeItem("boyuan_home_jokes");
   window.location.href = "/login";
 });
 
