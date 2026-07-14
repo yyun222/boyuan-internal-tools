@@ -38,14 +38,14 @@ function showHomeJoke() {
 
 async function loadHomeJokes() {
   try {
-    const cached = JSON.parse(sessionStorage.getItem("boyuan_home_jokes") || "[]");
+    const cached = JSON.parse(sessionStorage.getItem("boyuan_home_jokes_v2") || "[]");
     if (Array.isArray(cached) && cached.length === 10) { renderHomeJokes(cached); return; }
   } catch (_) {}
   try {
     const response = await fetch("/api/home-jokes", {cache:"no-store"});
     if (!response.ok) throw new Error("笑话加载失败");
     const data = await response.json();
-    sessionStorage.setItem("boyuan_home_jokes", JSON.stringify(data.jokes || []));
+    sessionStorage.setItem("boyuan_home_jokes_v2", JSON.stringify(data.jokes || []));
     renderHomeJokes(data.jokes || []);
   } catch (_) {
     renderHomeJokes([]);
@@ -119,6 +119,7 @@ $("#logout-btn").addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });
   sessionStorage.removeItem("boyuan_current_user");
   sessionStorage.removeItem("boyuan_home_jokes");
+  sessionStorage.removeItem("boyuan_home_jokes_v2");
   window.location.href = "/login";
 });
 

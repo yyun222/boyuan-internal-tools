@@ -16,7 +16,7 @@ from starlette.requests import Request
 from app.auth import utcnow
 from app.db.models import User
 from app.main import (
-    SessionLocal, _extract_cfun_jokes, _new_home_jokes, _next_statutory_holiday,
+    SessionLocal, _extract_cfun_jokes, _extract_cfun_range, _new_home_jokes, _next_statutory_holiday,
     api_home_jokes,
 )
 
@@ -29,6 +29,7 @@ def authenticated_request(user_id: int, jokes: list[str]) -> Request:
             "user_id": user_id,
             "authenticated_at": utcnow().isoformat(),
             "home_jokes": jokes,
+            "home_jokes_version": 2,
         },
     })
 
@@ -48,6 +49,16 @@ class HomeRegressionTests(unittest.TestCase):
             {"row": {"instruction": "请生成一个中文笑话", "input": "", "output": "第二条测试笑话"}},
         ]}
         self.assertEqual(_extract_cfun_jokes(payload), ["第一条测试笑话", "第二条测试笑话"])
+
+    def test_extracts_complete_rows_from_raw_json_range(self) -> None:
+        chunk = (
+            b'partial prefix},\n'
+            b'{"instruction":"generate joke","input":"","output":"range joke one"},\n'
+            b'{"instruction":"generate joke","input":"","output":"range joke two"},\n'
+            b'{"instruction":"incomplete"'
+        )
+        rows = _extract_cfun_range(chunk)
+        self.assertEqual([item["row"]["output"] for item in rows], ["range joke one", "range joke two"])
 
     def test_home_jokes_remain_stable_in_same_session(self) -> None:
         jokes = [f"会话笑话{index}" for index in range(10)]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 import csv
 import io
@@ -60,7 +61,16 @@ HOME_JOKE_FALLBACKS = (
     "手机电量只剩百分之一时，我突然理解了什么叫生命倒计时。",
     "我每天都坚持早起，只是起床这件事通常发生在中午。",
 )
+CFUN_ROWS_URL = "https://datasets-server.huggingface.co/rows"
+CFUN_RAW_URL = "https://huggingface.co/datasets/ZhenghanYU/CFunSet/resolve/main/CFunSet.json"
+CFUN_RAW_SIZE = 218_997_952
+CFUN_RANGE_SIZE = 256 * 1024
+# CFunSet is ordered by task; the opening region contains its Chumor joke samples.
+CFUN_JOKE_REGION_SIZE = 1_200_000
+HOME_JOKES_VERSION = 2
 HOLIDAY_API = "https://api.jiejiariapi.com/v1/holidays/{year}"
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Boyuan Internal Tools")
 app.add_middleware(
@@ -249,33 +259,89 @@ def _extract_cfun_jokes(payload: dict) -> list[str]:
         output_text = _clean_home_joke(row.get("output"))
         if "幽默的原因" in instruction or "分析" in instruction and "幽默" in instruction:
             candidate = input_text
-        elif any(word in instruction for word in ("生成", "续写", "补全", "笑话")):
+        elif "笑话" in instruction and any(word in instruction for word in ("生成", "续写", "补全")):
             candidate = output_text or input_text
         else:
-            candidate = input_text or output_text
+            continue
         if 6 <= len(candidate) <= 240 and candidate not in jokes and not candidate.startswith("这个笑话的幽默"):
             jokes.append(candidate)
     return jokes
 
 
-def _fetch_cfun_jokes() -> list[str]:
+def _extract_cfun_range(chunk: bytes) -> list[dict]:
+    """Extract complete JSON objects from a byte range within CFunSet.json."""
+    text = chunk.decode("utf-8", errors="ignore")
+    decoder = json.JSONDecoder()
+    rows = []
+    cursor = 0
+    while len(rows) < 30:
+        start = text.find("{", cursor)
+        if start < 0:
+            break
+        try:
+            row, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            cursor = start + 1
+            continue
+        cursor = end
+        if isinstance(row, dict) and {"instruction", "input", "output"}.issubset(row):
+            rows.append({"row": row})
+    return rows
+
+
+def _fetch_cfun_rows_api() -> list[str]:
     offset = secrets.randbelow(164_001)
     query = urlencode({
         "dataset": "ZhenghanYU/CFunSet", "config": "default", "split": "train",
-        "offset": offset, "length": 10,
+        "offset": offset, "length": 20,
     })
     request = UrlRequest(
-        f"https://datasets-server.huggingface.co/rows?{query}",
+        f"{CFUN_ROWS_URL}?{query}",
         headers={"User-Agent": "boyuan-internal-tools/1.0"},
     )
-    with urlopen(request, timeout=3) as response:
+    with urlopen(request, timeout=5) as response:
         return _extract_cfun_jokes(json.load(response))
+
+
+def _fetch_cfun_raw_range() -> list[str]:
+    jokes = []
+    for _ in range(2):
+        # Leave room for a complete trailing record and avoid the JSON array prefix.
+        start = 1 + secrets.randbelow(CFUN_JOKE_REGION_SIZE - CFUN_RANGE_SIZE - 1)
+        request = UrlRequest(CFUN_RAW_URL, headers={
+            "User-Agent": "boyuan-internal-tools/1.0",
+            "Range": f"bytes={start}-{start + CFUN_RANGE_SIZE - 1}",
+            "Accept-Encoding": "identity",
+        })
+        with urlopen(request, timeout=10) as response:
+            chunk = response.read(CFUN_RANGE_SIZE + 1)
+        if len(chunk) > CFUN_RANGE_SIZE:
+            raise ValueError("CFunSet server ignored the byte-range request")
+        for joke in _extract_cfun_jokes({"rows": _extract_cfun_range(chunk)}):
+            if joke not in jokes:
+                jokes.append(joke)
+        if len(jokes) >= 10:
+            break
+    if not jokes:
+        raise ValueError("No suitable jokes found in CFunSet byte ranges")
+    return jokes
+
+
+def _fetch_cfun_jokes() -> list[str]:
+    try:
+        jokes = _fetch_cfun_rows_api()
+        if jokes:
+            return jokes
+    except Exception as exc:
+        logger.warning("CFunSet rows API unavailable, trying raw range: %s", exc)
+    return _fetch_cfun_raw_range()
 
 
 async def _new_home_jokes(exclude: list[str] | None = None) -> list[str]:
     try:
         candidates = await asyncio.to_thread(_fetch_cfun_jokes)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Unable to fetch CFunSet jokes; using local fallbacks: %s", exc)
         candidates = []
     excluded = set(exclude or [])
     jokes = [joke for joke in candidates if joke not in excluded]
@@ -582,6 +648,7 @@ async def api_login(payload: LoginPayload, request: Request, db: Session = Depen
     _log_activity(db, user, "login", "auth", "用户登录")
     home_jokes = await _new_home_jokes(previous_jokes if isinstance(previous_jokes, list) else None)
     request.session["home_jokes"] = home_jokes
+    request.session["home_jokes_version"] = HOME_JOKES_VERSION
     request.session.pop("previous_home_jokes", None)
     return {"ok": True, "user": _user_payload(user), "homeJokes": home_jokes}
 
@@ -608,9 +675,11 @@ async def api_me(request: Request, db: Session = Depends(get_db)):
 async def api_home_jokes(request: Request, db: Session = Depends(get_db)):
     _require_user(request, db)
     jokes = request.session.get("home_jokes")
-    if not isinstance(jokes, list) or len(jokes) != 10:
+    if (not isinstance(jokes, list) or len(jokes) != 10
+            or request.session.get("home_jokes_version") != HOME_JOKES_VERSION):
         jokes = await _new_home_jokes()
         request.session["home_jokes"] = jokes
+        request.session["home_jokes_version"] = HOME_JOKES_VERSION
     return {"jokes": jokes}
 
 
