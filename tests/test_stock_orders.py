@@ -13,7 +13,7 @@ from sqlalchemy import event
 
 from app.auth import utcnow
 from app.db.models import Role, StockOrder, StockOrderWarning, User
-from app.main import SessionLocal, StockOrderPayload, _save_stock_order, _sync_stock_warnings, engine
+from app.main import SessionLocal, StockOrderPayload, _save_stock_order, _stock_month_range, _sync_stock_warnings, engine
 from app.services.stock_orders import business_datetime, module_status, sync_order_warnings
 
 
@@ -95,6 +95,11 @@ class StockOrderRegressionTests(unittest.TestCase):
     def test_business_timestamps_are_serialized_as_beijing_time(self) -> None:
         self.assertEqual(business_datetime(datetime(2026, 7, 13, 20, 30)), "2026-07-14T04:30:00")
 
+    def test_stock_month_range_uses_complete_beijing_month(self) -> None:
+        start, end = _stock_month_range("2026-07")
+        self.assertEqual(start, datetime(2026, 6, 30, 16))
+        self.assertEqual(end, datetime(2026, 7, 31, 16))
+
     def test_module_status_distinguishes_unfilled_in_progress_and_complete(self) -> None:
         order = StockOrder(order_no="TEST-THREE-STATES")
         self.assertEqual(module_status(order, "purchase"), "未填写")
@@ -102,6 +107,22 @@ class StockOrderRegressionTests(unittest.TestCase):
         self.assertEqual(module_status(order, "purchase"), "进行中")
         order.purchase_completed_at = utcnow()
         self.assertEqual(module_status(order, "purchase"), "已完成")
+
+    def test_saving_actual_delivery_automatically_completes_sales(self) -> None:
+        order = StockOrder(
+            order_no="TEST-AUTO-COMPLETE-SALES", internal_name="产品A",
+            order_type="备货订单", created_by_user_id=self.admin.id,
+        )
+        self.db.add(order)
+        self.db.flush()
+
+        saved = _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+            "actual_delivery": "2026-07-20",
+        }), order)
+
+        self.assertEqual(saved.actual_delivery, "2026-07-20")
+        self.assertIsNotNone(saved.sales_completed_at)
+        self.assertEqual(module_status(saved, "sales"), "已完成")
 
     def test_late_actual_delivery_creates_sales_warning(self) -> None:
         order = StockOrder(

@@ -291,11 +291,11 @@ async function loadUsers() {
         <tr>
           <td>${escapeHtml(user.displayName || "")}<br><span class="muted">${escapeHtml(user.email)}</span></td>
           <td>${escapeHtml((user.roleDisplayNames || user.roles || []).join("、") || "—")}</td>
-          <td><span class="user-state ${user.isActive ? user.status : "inactive"}">${user.isActive ? (user.status === "active" ? "正常" : "待设置密码") : "已停用"}</span></td>
+          <td><span class="user-state ${!user.hasPassword ? "pending" : (user.isActive ? "active" : "inactive")}">${!user.hasPassword ? "已邀请" : (user.isActive ? "正常" : "已停用")}</span></td>
           <td>${formatDateTime(user.invitedAt)}</td>
           <td>${formatDateTime(user.passwordSetAt)}</td>
           <td>${formatDateTime(user.lastActivityAt)}</td>
-          <td><div class="user-row-actions"><button type="button" class="user-permission-btn" data-user-id="${user.id}">更新权限</button><button type="button" class="user-status-btn ${user.isActive ? "deactivate" : "activate"}" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}" data-user-active="${user.isActive}">${user.isActive ? "停用" : "启用"}</button><button type="button" class="user-reset-btn" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}">重置密码</button></div></td>
+          <td><div class="user-row-actions"><button type="button" class="user-permission-btn" data-user-id="${user.id}">更新权限</button><button type="button" class="user-status-btn ${user.isActive ? "deactivate" : "activate"}" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}" data-user-active="${user.isActive}" ${!user.hasPassword ? "disabled" : ""}>${user.isActive ? "停用" : "启用"}</button><button type="button" class="user-reset-btn" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}" ${!user.hasPassword ? "disabled" : ""}>重置密码</button></div></td>
         </tr>
       `).join("")}</tbody>
     `;
@@ -947,6 +947,9 @@ let stockCurrent = null;
 let stockHistory = [];
 let stockMode = "view";
 let stockPage = 1;
+let stockPageSize = 10;
+let stockSortBy = "";
+let stockSortOrder = "asc";
 const STOCK_GROUPS = [
   ["基础与销售", "sales", [["internal_name","内部简称"],["cas","CAS"],["quantity","数量"],["order_type","订单类型","select"],["salesperson","业务员"],["demand_date","提需求日期","date"],["customer_name","客户名称"],["order_situation","订单情况","textarea"],["quality_requirement","质量要求","textarea"],["delivery_requirement","交货期需求","date"],["sales_note","其他说明","textarea"],["actual_delivery","实际交货","date"]]],
   ["采购部", "purchase", [["purchase_not_required","无需采购","checkbox"],["purchase_items","采购原料及数量","items"],["purchase_date","采购日期","date"],["arrival_date","预计到货时间","date"],["purchase_note","采购说明","textarea"],["purchase_owner","采购负责人"]]],
@@ -957,11 +960,31 @@ const STOCK_GROUPS = [
 function initStockOrders(user) {
   stockUser = user;
   $("#stock-new-btn")?.addEventListener("click", () => openStockOrder());
-  $("#stock-search-btn")?.addEventListener("click", () => { stockPage = 1; loadStockOrders(); });
+  $("#stock-search-btn")?.addEventListener("click", () => {
+    if (!validateStockDateRange()) return;
+    stockPage = 1;
+    loadStockOrders();
+  });
+  [$("#stock-from"), $("#stock-to")].forEach(input => input?.addEventListener("input", validateStockDateRange));
+  document.querySelector(".stock-table thead")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-stock-sort]");
+    if (!button) return;
+    const field = button.dataset.stockSort;
+    stockSortOrder = stockSortBy === field && stockSortOrder === "asc" ? "desc" : "asc";
+    stockSortBy = field;
+    stockPage = 1;
+    loadStockOrders();
+  });
   $("#stock-pagination")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-stock-page]");
     if (!button || button.disabled) return;
     stockPage = Number(button.dataset.stockPage);
+    loadStockOrders();
+  });
+  $("#stock-pagination")?.addEventListener("change", (event) => {
+    if (!event.target.matches("[data-stock-page-size]")) return;
+    stockPageSize = Number(event.target.value);
+    stockPage = 1;
     loadStockOrders();
   });
   $("#stock-history-btn")?.addEventListener("click", () => {
@@ -994,21 +1017,39 @@ async function stockApi(url, options = {}) {
 
 async function loadStockOrders() {
   if (!stockUser) return;
-  const params = new URLSearchParams({q:$("#stock-q").value, order_type:$("#stock-type").value, incomplete:$("#stock-incomplete").value, date_from:$("#stock-from").value, date_to:$("#stock-to").value, page:String(stockPage), page_size:"10"});
+  const params = new URLSearchParams({q:$("#stock-q").value, order_type:$("#stock-type").value, incomplete:$("#stock-incomplete").value, date_from:$("#stock-from").value, date_to:$("#stock-to").value, page:String(stockPage), page_size:String(stockPageSize), sort_by:stockSortBy, sort_order:stockSortOrder});
   const body = $("#stock-rows");
-  body.innerHTML = '<tr><td colspan="12" class="empty">正在加载…</td></tr>';
+  body.innerHTML = '<tr><td colspan="13" class="empty">正在加载…</td></tr>';
   try {
     const data = await stockApi("/api/stock-orders?" + params);
-    body.innerHTML = data.orders.length ? data.orders.map(stockRow).join("") : '<tr><td colspan="12" class="empty">暂无订单</td></tr>';
+    body.innerHTML = data.orders.length ? data.orders.map(stockRow).join("") : '<tr><td colspan="13" class="empty">暂无订单</td></tr>';
     stockPage = data.pagination.page;
+    renderStockSortHeaders();
     renderStockPagination(data.pagination);
-  } catch (err) { body.innerHTML = `<tr><td colspan="12" class="empty">${escapeHtml(err.message)}</td></tr>`; }
+  } catch (err) { body.innerHTML = `<tr><td colspan="13" class="empty">${escapeHtml(err.message)}</td></tr>`; }
+}
+
+function renderStockSortHeaders() {
+  document.querySelectorAll("[data-stock-sort]").forEach(button => {
+    const active = button.dataset.stockSort === stockSortBy;
+    button.classList.toggle("active", active);
+    button.querySelector("span").textContent = active ? (stockSortOrder === "asc" ? "↑" : "↓") : "↕";
+  });
+}
+
+function validateStockDateRange() {
+  const from = $("#stock-from");
+  const to = $("#stock-to");
+  const incompleteRange = Boolean(from?.value) !== Boolean(to?.value);
+  from?.classList.toggle("stock-date-required", incompleteRange && !from.value);
+  to?.classList.toggle("stock-date-required", incompleteRange && !to.value);
+  return !incompleteRange;
 }
 
 function renderStockPagination(pagination) {
   const target = $("#stock-pagination");
   if (!target) return;
-  target.innerHTML = `<span>第 ${pagination.page} / ${pagination.totalPages} 页，共 ${pagination.total} 条</span><div><button type="button" data-stock-page="${pagination.page - 1}" ${pagination.page <= 1 ? "disabled" : ""}>上一页</button><button type="button" data-stock-page="${pagination.page + 1}" ${pagination.page >= pagination.totalPages ? "disabled" : ""}>下一页</button></div>`;
+  target.innerHTML = `<div class="stock-page-summary"><label>每页显示 <select data-stock-page-size>${[10,20,50,100].map(size => `<option value="${size}" ${size === pagination.pageSize ? "selected" : ""}>${size}</option>`).join("")}</select> 条</label><span>第 ${pagination.page} / ${pagination.totalPages} 页，共 ${pagination.total} 条</span></div><div><button type="button" data-stock-page="${pagination.page - 1}" ${pagination.page <= 1 ? "disabled" : ""}>上一页</button><button type="button" data-stock-page="${pagination.page + 1}" ${pagination.page >= pagination.totalPages ? "disabled" : ""}>下一页</button></div>`;
 }
 
 function stockState(order, module) {
@@ -1034,7 +1075,7 @@ function stockRow(order) {
   const canEdit = order.archive_status !== "已取消" && stockUser.permissions?.updateStockOrders && canEditDepartment;
   const cancel = stockUser.roles?.includes("admin") && order.archive_status !== "已取消" ? `<button class="danger" onclick="cancelStockOrder(${order.id})">取消订单</button>` : "";
   const deliveryLate = order.warnings?.some(item => item.type === "sales_delivery_late");
-  return `<tr class="${order.archive_status === "已取消" ? "stock-cancelled-row" : ""}"><td><strong>${escapeHtml(order.order_no)}</strong>${order.archive_status === "已取消" ? '<br><span class="stock-state cancelled">已取消</span>' : ""}</td><td>${escapeHtml(order.order_type)}</td><td>${escapeHtml(order.customer_name || "—")}</td><td>${escapeHtml(order.internal_name || "—")}<br><span class="muted">${escapeHtml(order.cas || "")}</span></td><td>${escapeHtml(order.quantity || "—")}</td><td>${stockState(order,"sales")}</td><td>${stockState(order,"purchase")}</td><td>${stockState(order,"production")}</td><td>${stockState(order,"qc")}</td><td class="${deliveryLate ? "stock-delivery-late" : ""}">${escapeHtml(order.actual_delivery || "—")}${deliveryLate ? "<br>晚于交货期需求" : ""}</td><td>${escapeHtml((order.updated_at || "").replace("T"," ").slice(0,16))}</td><td><button class="stock-open-btn" onclick="openStockOrder(${order.id},'view')">查看</button>${canEdit ? `<button class="stock-open-btn" onclick="openStockOrder(${order.id},'edit')">修改</button>` : ""}<button class="stock-open-btn" onclick="openOrderStockHistory('${escapeHtml(order.order_no)}')">历史</button>${cancel}</td></tr>`;
+  return `<tr class="${order.archive_status === "已取消" ? "stock-cancelled-row" : ""}"><td><strong>${escapeHtml(order.order_no)}</strong>${order.archive_status === "已取消" ? '<br><span class="stock-state cancelled">已取消</span>' : ""}</td><td>${escapeHtml(order.order_type)}</td><td>${escapeHtml(order.customer_name || "—")}</td><td>${escapeHtml(order.internal_name || "—")}<br><span class="muted">${escapeHtml(order.cas || "")}</span></td><td>${escapeHtml(order.quantity || "—")}</td><td>${stockState(order,"sales")}</td><td>${stockState(order,"purchase")}</td><td>${stockState(order,"production")}</td><td>${stockState(order,"qc")}</td><td class="${deliveryLate ? "stock-delivery-late" : ""}">${escapeHtml(order.actual_delivery || "—")}${deliveryLate ? "<br>晚于交货期需求" : ""}</td><td>${escapeHtml((order.created_at || "").replace("T"," ").slice(0,16))}</td><td>${escapeHtml((order.updated_at || "").replace("T"," ").slice(0,16))}</td><td><button class="stock-open-btn" onclick="openStockOrder(${order.id},'view')">查看</button>${canEdit ? `<button class="stock-open-btn" onclick="openStockOrder(${order.id},'edit')">修改</button>` : ""}<button class="stock-open-btn" onclick="openOrderStockHistory('${escapeHtml(order.order_no)}')">历史</button>${cancel}</td></tr>`;
 }
 
 async function openStockOrder(id = null, mode = "edit") {
@@ -1089,7 +1130,7 @@ function renderStockForm() {
     const moduleDone = module === "sales" ? stockCurrent.sales_completed_at : done;
     const canComplete = stockMode === "edit" && stockCurrent.id && (!hold || module === "sales") && !cancelled && stockCurrent.editableModules.includes(module) && !moduleDone;
     const recognize = stockMode === "edit" && ["sales","purchase"].includes(module) && stockCurrent.editableModules.includes(module) && (!moduleDone || stockCurrent.isAdmin) ? `<button type="button" data-stock-recognize="${module}">粘贴并识别</button>` : "";
-    const canSaveModule = stockMode === "edit" && stockCurrent.id && (!hold || module === "sales") && !cancelled && stockCurrent.editableModules.includes(module) && (!moduleDone || stockCurrent.isAdmin);
+    const canSaveModule = stockMode === "edit" && (stockCurrent.id || module === "sales") && (!hold || module === "sales") && !cancelled && stockCurrent.editableModules.includes(module) && (!moduleDone || stockCurrent.isAdmin);
     return `<section class="stock-module"><div class="stock-module-head"><h4>${title}</h4><div class="stock-module-actions">${recognize}${canSaveModule ? `<button class="stock-module-save" type="button" data-stock-save-module="${module}">保存</button>` : ""}${moduleDone ? `<span class="stock-state done">完成于 ${escapeHtml(moduleDone.slice(0,16).replace("T"," "))}</span>` : (canComplete ? `<button type="button" data-stock-complete="${module}">完成确认</button>` : "")}</div></div><div class="stock-form-grid ${stockMode === "view" ? "stock-view-grid" : ""}">${fields.map(renderStockField).join("")}</div></section>`;
   }).join("")}</div>${stockMode === "edit" && stockCurrent.isAdmin ? '<label class="stock-reason"><span>管理员修正原因（修改跨日锁定字段时必填）</span><input name="reason"></label>' : ''}<div class="stock-form-footer"><span></span><div><button type="button" data-stock-close onclick="closeStockOrder()">关闭</button>${stockMode === "edit" && !cancelled && stockUser.permissions?.updateStockOrders ? '<button class="primary" type="submit">保存</button>' : ''}</div></div></form>`;
 }
@@ -1153,9 +1194,10 @@ function collectStockFields(form, onlyModule = null) {
 async function saveStockModule(module) {
   const form = $("#stock-order-form");
   try {
-    const data = await stockApi(`/api/stock-orders/${stockCurrent.id}`, {method:"PUT", body:JSON.stringify({fields:collectStockFields(form, module), reason:form.elements.reason?.value || ""})});
+    const creating = !stockCurrent.id;
+    await stockApi(creating ? "/api/stock-orders" : `/api/stock-orders/${stockCurrent.id}`, {method:creating ? "POST" : "PUT", body:JSON.stringify({fields:collectStockFields(form, module), reason:form.elements.reason?.value || ""})});
+    closeStockOrder();
     await loadStockOrders();
-    await openStockOrder(data.order.id, "edit");
   } catch (err) { alert(err.message); }
 }
 
@@ -1163,15 +1205,16 @@ async function saveStockOrder(event) {
   event.preventDefault();
   const form = event.target;
   try {
-    const data = await stockApi(stockCurrent.id ? `/api/stock-orders/${stockCurrent.id}` : "/api/stock-orders", {method:stockCurrent.id ? "PUT" : "POST", body:JSON.stringify({fields:collectStockFields(form), reason:form.elements.reason?.value || ""})});
-    await loadStockOrders(); await openStockOrder(data.order.id);
+    await stockApi(stockCurrent.id ? `/api/stock-orders/${stockCurrent.id}` : "/api/stock-orders", {method:stockCurrent.id ? "PUT" : "POST", body:JSON.stringify({fields:collectStockFields(form), reason:form.elements.reason?.value || ""})});
+    closeStockOrder();
+    await loadStockOrders();
   } catch (err) { alert(err.message); }
 }
 
 async function completeStockModule(module) {
   if (!confirm("确认该模块已经填写完成？完成后普通账号将不能再修改。")) return;
   const form = $("#stock-order-form");
-  try { await stockApi(`/api/stock-orders/${stockCurrent.id}/complete`, {method:"POST", body:JSON.stringify({module, fields:collectStockFields(form)})}); await loadStockOrders(); await openStockOrder(stockCurrent.id); }
+  try { await stockApi(`/api/stock-orders/${stockCurrent.id}/complete`, {method:"POST", body:JSON.stringify({module, fields:collectStockFields(form)})}); closeStockOrder(); await loadStockOrders(); }
   catch (err) { alert(err.message); }
 }
 

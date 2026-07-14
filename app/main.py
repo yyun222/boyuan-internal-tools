@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import Numeric, and_, case, cast, or_
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -802,8 +802,11 @@ def _sync_stock_warnings(db: Session, orders: list[StockOrder]) -> dict[int, lis
 @app.get("/api/stock-orders")
 async def api_stock_orders(request: Request, q: str = "", order_type: str = "", incomplete: str = "",
                            date_from: str = "", date_to: str = "", page: int = 1,
-                           page_size: int = 10, db: Session = Depends(get_db)):
+                           page_size: int = 10, sort_by: str = "", sort_order: str = "asc",
+                           db: Session = Depends(get_db)):
     _require_permission(request, db, "can_view_stock_orders")
+    if bool(date_from) != bool(date_to):
+        raise HTTPException(400, "开始日期和结束日期必须同时选择")
     query = db.query(StockOrder).filter(StockOrder.deleted_at.is_(None))
     if q.strip():
         like = f"%{q.strip()}%"
@@ -812,30 +815,66 @@ async def api_stock_orders(request: Request, q: str = "", order_type: str = "", 
     if order_type:
         query = query.filter(StockOrder.order_type == order_type)
     if date_from:
-        query = query.filter(StockOrder.updated_at >= datetime.fromisoformat(date_from) - timedelta(hours=settings.business_utc_offset_hours))
+        query = query.filter(StockOrder.created_at >= datetime.fromisoformat(date_from) - timedelta(hours=settings.business_utc_offset_hours))
     if date_to:
-        query = query.filter(StockOrder.updated_at < datetime.fromisoformat(date_to) + timedelta(days=1) - timedelta(hours=settings.business_utc_offset_hours))
+        query = query.filter(StockOrder.created_at < datetime.fromisoformat(date_to) + timedelta(days=1) - timedelta(hours=settings.business_utc_offset_hours))
     if incomplete:
         key = incomplete.lower()
         query = query.filter(StockOrder.archive_status != "已取消")
         incomplete_filters = {
-            "purchase": StockOrder.purchase_completed_at.is_(None),
-            "采购": StockOrder.purchase_completed_at.is_(None),
-            "production": StockOrder.production_completed_at.is_(None),
-            "生产": StockOrder.production_completed_at.is_(None),
-            "qc": StockOrder.qc_completed_at.is_(None),
-            "质量": StockOrder.qc_completed_at.is_(None),
+            "purchase": and_(
+                StockOrder.purchase_completed_at.is_(None),
+                StockOrder.purchase_not_required.is_(False),
+                StockOrder.order_type != "留货订单",
+            ),
+            "采购": and_(
+                StockOrder.purchase_completed_at.is_(None),
+                StockOrder.purchase_not_required.is_(False),
+                StockOrder.order_type != "留货订单",
+            ),
+            "production": and_(
+                StockOrder.production_completed_at.is_(None),
+                StockOrder.production_not_required.is_(False),
+                StockOrder.order_type != "留货订单",
+            ),
+            "生产": and_(
+                StockOrder.production_completed_at.is_(None),
+                StockOrder.production_not_required.is_(False),
+                StockOrder.order_type != "留货订单",
+            ),
+            "qc": and_(
+                StockOrder.qc_completed_at.is_(None),
+                StockOrder.qc_not_required.is_(False),
+                StockOrder.order_type != "留货订单",
+            ),
+            "质量": and_(
+                StockOrder.qc_completed_at.is_(None),
+                StockOrder.qc_not_required.is_(False),
+                StockOrder.order_type != "留货订单",
+            ),
             "sales": StockOrder.actual_delivery == "",
             "销售": StockOrder.actual_delivery == "",
         }
         if key in incomplete_filters:
             query = query.filter(incomplete_filters[key])
     page = max(page, 1)
-    page_size = 10
+    page_size = page_size if page_size in {10, 20, 50, 100} else 10
     total = query.count()
     total_pages = max(1, (total + page_size - 1) // page_size)
     page = min(page, total_pages)
-    rows = query.order_by(StockOrder.updated_at.desc(), StockOrder.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    sort_columns = {
+        "quantity": cast(StockOrder.quantity, Numeric(20, 4)),
+        "actual_delivery": case((StockOrder.actual_delivery == "", ""), else_=StockOrder.actual_delivery),
+        "created_at": StockOrder.created_at,
+        "updated_at": StockOrder.updated_at,
+    }
+    if sort_by in sort_columns:
+        sort_column = sort_columns[sort_by]
+        direction = sort_column.desc() if sort_order.lower() == "desc" else sort_column.asc()
+        query = query.order_by(direction, StockOrder.id.desc())
+    else:
+        query = query.order_by(StockOrder.updated_at.desc(), StockOrder.id.desc())
+    rows = query.offset((page - 1) * page_size).limit(page_size).all()
     warnings_by_order = _sync_stock_warnings(db, rows)
     payloads = [order_payload(db, row, warning_rows=warnings_by_order[row.id]) for row in rows]
     db.commit()
@@ -910,6 +949,9 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         has_meaningful_value = any(value not in (None, "", False, "[]") for value in module_values)
         if module in changed_modules and has_meaningful_value and not getattr(order, timestamp_field):
             setattr(order, timestamp_field, utcnow())
+    if "actual_delivery" in fields and order.actual_delivery and not order.sales_completed_at:
+        order.sales_completed_at = utcnow()
+        _stock_log(db, order, user, "sales", "complete", "完成确认", new_value="已填写实际交货时间")
     if changes:
         order.updated_by_user_id = user.id
         order.updated_at = utcnow()
@@ -994,6 +1036,16 @@ async def api_cancel_stock_order(order_id: int, payload: StockCancelPayload, req
     return {"ok": True}
 
 
+def _stock_month_range(month: str) -> tuple[datetime, datetime]:
+    try:
+        local_start = datetime.strptime(month, "%Y-%m")
+    except ValueError as exc:
+        raise HTTPException(400, "月份格式无效") from exc
+    local_end = (local_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    offset = timedelta(hours=settings.business_utc_offset_hours)
+    return local_start - offset, local_end - offset
+
+
 @app.get("/api/stock-orders-history")
 async def api_stock_order_history(request: Request, order: str = "", operator: str = "", month: str = "", db: Session = Depends(get_db)):
     user = _require_permission(request, db, "can_view_stock_orders")
@@ -1005,11 +1057,7 @@ async def api_stock_order_history(request: Request, order: str = "", operator: s
     if operator:
         query = query.filter(StockOrderChangeLog.operator_name.like(f"%{operator}%"))
     if month:
-        try:
-            start = datetime.strptime(month, "%Y-%m") - timedelta(hours=settings.business_utc_offset_hours)
-            end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
-        except ValueError as exc:
-            raise HTTPException(400, "月份格式无效") from exc
+        start, end = _stock_month_range(month)
         query = query.join(StockOrder, StockOrder.id == StockOrderChangeLog.order_id).filter(StockOrder.created_at >= start, StockOrder.created_at < end)
     logs = query.order_by(StockOrderChangeLog.operated_at.desc()).limit(1000).all()
     return {"logs": [{
@@ -1027,11 +1075,7 @@ def _stock_export_orders(db: Session, order: str, operator: str, month: str):
         ids = db.query(StockOrderChangeLog.order_id).filter(StockOrderChangeLog.operator_name.like(f"%{operator}%")).distinct()
         query = query.filter(StockOrder.id.in_(ids))
     if month:
-        try:
-            start = datetime.strptime(month, "%Y-%m") - timedelta(hours=settings.business_utc_offset_hours)
-            end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
-        except ValueError as exc:
-            raise HTTPException(400, "月份格式无效") from exc
+        start, end = _stock_month_range(month)
         query = query.filter(StockOrder.created_at >= start, StockOrder.created_at < end)
     return query.order_by(StockOrder.created_at.desc()).all()
 
