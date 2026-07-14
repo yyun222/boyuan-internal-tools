@@ -55,6 +55,22 @@ def business_date(value: datetime | None = None) -> str:
     return ((value or utcnow()) + timedelta(hours=settings.business_utc_offset_hours)).date().isoformat()
 
 
+def business_datetime(value: datetime | None) -> str:
+    """Serialize a naive UTC database timestamp as Beijing/business time."""
+    if value is None:
+        return ""
+    return (value + timedelta(hours=settings.business_utc_offset_hours)).isoformat()
+
+
+def module_status(order: StockOrder, module: str) -> str:
+    """Return the three-state form status shown in the tracking table."""
+    done_key = "sales_completed_at" if module == "sales" else MODULES[module][1]
+    if getattr(order, done_key):
+        return "已完成"
+    values = [getattr(order, key) for key, meta in FIELD_META.items() if meta[2] == module]
+    return "进行中" if any(value not in (None, "", False, "[]") for value in values) else "未填写"
+
+
 def user_modules(user: User) -> set[str]:
     if any(role.deleted_at is None and role.name == "admin" for role in user.roles):
         return {"sales", "purchase", "production", "qc"}
@@ -175,18 +191,19 @@ def order_payload(
         "id": order.id,
         "order_no": order.order_no,
         "archive_status": order.archive_status,
-        "sales_completed_at": order.sales_completed_at.isoformat() if order.sales_completed_at else "",
-        "purchase_completed_at": order.purchase_completed_at.isoformat() if order.purchase_completed_at else "",
-        "production_completed_at": order.production_completed_at.isoformat() if order.production_completed_at else "",
-        "qc_completed_at": order.qc_completed_at.isoformat() if order.qc_completed_at else "",
-        "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else "",
+        "sales_completed_at": business_datetime(order.sales_completed_at),
+        "purchase_completed_at": business_datetime(order.purchase_completed_at),
+        "production_completed_at": business_datetime(order.production_completed_at),
+        "qc_completed_at": business_datetime(order.qc_completed_at),
+        "cancelled_at": business_datetime(order.cancelled_at),
         "cancelled_reason": order.cancelled_reason or "",
-        "created_at": order.created_at.isoformat() if order.created_at else "",
-        "updated_at": order.updated_at.isoformat() if order.updated_at else "",
+        "created_at": business_datetime(order.created_at),
+        "updated_at": business_datetime(order.updated_at),
+        "module_statuses": {module: module_status(order, module) for module in ("sales", *MODULES)},
         "overdue": overdue(order),
         "warnings": [] if order.archive_status == "已取消" else [{
             "department": row.department, "type": row.warning_type,
-            "message": row.message, "occurredAt": row.occurred_at.isoformat(),
+            "message": row.message, "occurredAt": business_datetime(row.occurred_at),
         } for row in (
             warning_rows if warning_rows is not None
             else db.query(StockOrderWarning).filter_by(order_id=order.id).order_by(StockOrderWarning.occurred_at).all()

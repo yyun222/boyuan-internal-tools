@@ -58,6 +58,14 @@ document.querySelectorAll(".nav-item").forEach((el) => el.addEventListener("clic
 window.addEventListener("resize", () => {
   if (window.innerWidth > 640) closeSidebar();
 });
+const sidebarCollapseBtn = $("#sidebar-collapse-btn");
+if (localStorage.getItem("boyuan_sidebar_collapsed") === "true") document.body.classList.add("sidebar-collapsed");
+sidebarCollapseBtn?.addEventListener("click", () => {
+  const collapsed = document.body.classList.toggle("sidebar-collapsed");
+  sidebarCollapseBtn.setAttribute("aria-label", collapsed ? "显示左侧菜单" : "隐藏左侧菜单");
+  sidebarCollapseBtn.title = collapsed ? "显示左侧菜单" : "隐藏左侧菜单";
+  localStorage.setItem("boyuan_sidebar_collapsed", String(collapsed));
+});
 
 function applyPermissions(user) {
   const permissions = user.permissions || {};
@@ -659,7 +667,9 @@ function allowedAssetDepartmentOptions(selected = "") {
 }
 
 function assetToday() {
-  return new Date().toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-US", {timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit"}).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 function assetUid() {
@@ -936,6 +946,7 @@ let stockUser = null;
 let stockCurrent = null;
 let stockHistory = [];
 let stockMode = "view";
+let stockPage = 1;
 const STOCK_GROUPS = [
   ["基础与销售", "sales", [["internal_name","内部简称"],["cas","CAS"],["quantity","数量"],["order_type","订单类型","select"],["salesperson","业务员"],["demand_date","提需求日期","date"],["customer_name","客户名称"],["order_situation","订单情况","textarea"],["quality_requirement","质量要求","textarea"],["delivery_requirement","交货期需求","date"],["sales_note","其他说明","textarea"],["actual_delivery","实际交货","date"]]],
   ["采购部", "purchase", [["purchase_not_required","无需采购","checkbox"],["purchase_items","采购原料及数量","items"],["purchase_date","采购日期","date"],["arrival_date","预计到货时间","date"],["purchase_note","采购说明","textarea"],["purchase_owner","采购负责人"]]],
@@ -946,8 +957,19 @@ const STOCK_GROUPS = [
 function initStockOrders(user) {
   stockUser = user;
   $("#stock-new-btn")?.addEventListener("click", () => openStockOrder());
-  $("#stock-search-btn")?.addEventListener("click", loadStockOrders);
-  $("#stock-history-btn")?.addEventListener("click", openStockHistory);
+  $("#stock-search-btn")?.addEventListener("click", () => { stockPage = 1; loadStockOrders(); });
+  $("#stock-pagination")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-stock-page]");
+    if (!button || button.disabled) return;
+    stockPage = Number(button.dataset.stockPage);
+    loadStockOrders();
+  });
+  $("#stock-history-btn")?.addEventListener("click", () => {
+    $("#stock-history-order").value = "";
+    $("#stock-history-operator").value = "";
+    $("#stock-history-month").value = "";
+    openStockHistory();
+  });
   $("#stock-history-search")?.addEventListener("click", loadStockHistory);
   $("#stock-history-export")?.addEventListener("click", () => exportStockCsv("changes"));
   $("#stock-orders-export")?.addEventListener("click", () => exportStockCsv("orders"));
@@ -972,13 +994,21 @@ async function stockApi(url, options = {}) {
 
 async function loadStockOrders() {
   if (!stockUser) return;
-  const params = new URLSearchParams({q:$("#stock-q").value, order_type:$("#stock-type").value, incomplete:$("#stock-incomplete").value, date_from:$("#stock-from").value, date_to:$("#stock-to").value});
+  const params = new URLSearchParams({q:$("#stock-q").value, order_type:$("#stock-type").value, incomplete:$("#stock-incomplete").value, date_from:$("#stock-from").value, date_to:$("#stock-to").value, page:String(stockPage), page_size:"10"});
   const body = $("#stock-rows");
   body.innerHTML = '<tr><td colspan="12" class="empty">正在加载…</td></tr>';
   try {
     const data = await stockApi("/api/stock-orders?" + params);
     body.innerHTML = data.orders.length ? data.orders.map(stockRow).join("") : '<tr><td colspan="12" class="empty">暂无订单</td></tr>';
+    stockPage = data.pagination.page;
+    renderStockPagination(data.pagination);
   } catch (err) { body.innerHTML = `<tr><td colspan="12" class="empty">${escapeHtml(err.message)}</td></tr>`; }
+}
+
+function renderStockPagination(pagination) {
+  const target = $("#stock-pagination");
+  if (!target) return;
+  target.innerHTML = `<span>第 ${pagination.page} / ${pagination.totalPages} 页，共 ${pagination.total} 条</span><div><button type="button" data-stock-page="${pagination.page - 1}" ${pagination.page <= 1 ? "disabled" : ""}>上一页</button><button type="button" data-stock-page="${pagination.page + 1}" ${pagination.page >= pagination.totalPages ? "disabled" : ""}>下一页</button></div>`;
 }
 
 function stockState(order, module) {
@@ -989,12 +1019,12 @@ function stockState(order, module) {
   if (order.order_type === "留货订单" && module !== "sales") return '<span class="stock-state muted-state">无需处理</span>';
   const department = {sales:"销售部",purchase:"采购部",production:"生产部",qc:"质量部"}[module];
   const warning = order.warnings?.find(item => item.department === department);
-  if (module === "sales") return warning ? `<span class="stock-state late">${escapeHtml(warning.message)}</span>` : (order.actual_delivery ? '<span class="stock-state done">已交货</span>' : (order.sales_completed_at ? '<span class="stock-state done">已填写</span>' : '<span class="stock-state pending">待填写</span>'));
-  const key = `${module}_completed_at`;
   if (warning) return `<span class="stock-state late">${escapeHtml(warning.message)}</span>`;
-  if (order[key]) return `<span class="stock-state done">已完成</span>`;
   if (order.overdue?.[module]) return `<span class="stock-state late">${escapeHtml(order.overdue[module])}</span>`;
-  return '<span class="stock-state pending">进行中</span>';
+  const status = order.module_statuses?.[module] || "未填写";
+  if (status === "已完成") return '<span class="stock-state done">已完成</span>';
+  if (status === "进行中") return '<span class="stock-state pending">进行中</span>';
+  return '<span class="stock-state unfilled">未填写</span>';
 }
 
 function stockRow(order) {
@@ -1003,7 +1033,8 @@ function stockRow(order) {
   const canEditDepartment = stockUser.roles?.includes("admin") || Boolean(ownEditableModule);
   const canEdit = order.archive_status !== "已取消" && stockUser.permissions?.updateStockOrders && canEditDepartment;
   const cancel = stockUser.roles?.includes("admin") && order.archive_status !== "已取消" ? `<button class="danger" onclick="cancelStockOrder(${order.id})">取消订单</button>` : "";
-  return `<tr class="${order.archive_status === "已取消" ? "stock-cancelled-row" : ""}"><td><strong>${escapeHtml(order.order_no)}</strong>${order.archive_status === "已取消" ? '<br><span class="stock-state cancelled">已取消</span>' : ""}</td><td>${escapeHtml(order.order_type)}</td><td>${escapeHtml(order.customer_name || "—")}</td><td>${escapeHtml(order.internal_name || "—")}<br><span class="muted">${escapeHtml(order.cas || "")}</span></td><td>${escapeHtml(order.quantity || "—")}</td><td>${stockState(order,"sales")}</td><td>${stockState(order,"purchase")}</td><td>${stockState(order,"production")}</td><td>${stockState(order,"qc")}</td><td>${escapeHtml(order.actual_delivery || "—")}</td><td>${escapeHtml((order.updated_at || "").replace("T"," ").slice(0,16))}</td><td><button class="stock-open-btn" onclick="openStockOrder(${order.id},'view')">查看</button>${canEdit ? `<button onclick="openStockOrder(${order.id},'edit')">修改</button>` : ""}${cancel}</td></tr>`;
+  const deliveryLate = order.warnings?.some(item => item.type === "sales_delivery_late");
+  return `<tr class="${order.archive_status === "已取消" ? "stock-cancelled-row" : ""}"><td><strong>${escapeHtml(order.order_no)}</strong>${order.archive_status === "已取消" ? '<br><span class="stock-state cancelled">已取消</span>' : ""}</td><td>${escapeHtml(order.order_type)}</td><td>${escapeHtml(order.customer_name || "—")}</td><td>${escapeHtml(order.internal_name || "—")}<br><span class="muted">${escapeHtml(order.cas || "")}</span></td><td>${escapeHtml(order.quantity || "—")}</td><td>${stockState(order,"sales")}</td><td>${stockState(order,"purchase")}</td><td>${stockState(order,"production")}</td><td>${stockState(order,"qc")}</td><td class="${deliveryLate ? "stock-delivery-late" : ""}">${escapeHtml(order.actual_delivery || "—")}${deliveryLate ? "<br>晚于交货期需求" : ""}</td><td>${escapeHtml((order.updated_at || "").replace("T"," ").slice(0,16))}</td><td><button class="stock-open-btn" onclick="openStockOrder(${order.id},'view')">查看</button>${canEdit ? `<button class="stock-open-btn" onclick="openStockOrder(${order.id},'edit')">修改</button>` : ""}<button class="stock-open-btn" onclick="openOrderStockHistory('${escapeHtml(order.order_no)}')">历史</button>${cancel}</td></tr>`;
 }
 
 async function openStockOrder(id = null, mode = "edit") {
@@ -1017,6 +1048,7 @@ async function openStockOrder(id = null, mode = "edit") {
     $("#stock-modal-mask").classList.add("active");
     $("#stock-order-form").addEventListener("submit", saveStockOrder);
     document.querySelectorAll("[data-stock-complete]").forEach(btn => btn.addEventListener("click", () => completeStockModule(btn.dataset.stockComplete)));
+    document.querySelectorAll("[data-stock-save-module]").forEach(btn => btn.addEventListener("click", () => saveStockModule(btn.dataset.stockSaveModule)));
     document.querySelectorAll("[data-stock-recognize]").forEach(btn => btn.addEventListener("click", () => recognizeStockText(btn.dataset.stockRecognize)));
     $("#stock-add-purchase-row")?.addEventListener("click", addPurchaseRow);
     $("#stock-cancel-btn")?.addEventListener("click", cancelStockOrder);
@@ -1044,9 +1076,9 @@ function renderStockField([key,label,type]) {
     return `<div class="wide stock-purchase-items" data-disabled="${disabled ? "true" : "false"}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><div id="stock-purchase-item-rows">${items.map(item => purchaseItemRow(item, disabled)).join("")}</div>${disabled ? "" : '<button id="stock-add-purchase-row" type="button">添加一行</button>'}</div>`;
   }
   if (type === "checkbox") return `<label class="stock-check"><input name="${key}" type="checkbox" ${value ? "checked" : ""} ${disabled ? "disabled" : ""}>${label}${locked ? ' <em>已锁定</em>' : ''}</label>`;
-  if (type === "select") return `<label><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><select name="${key}" ${disabled ? "disabled" : ""}><option ${value === "备货订单" ? "selected" : ""}>备货订单</option><option ${value === "留货订单" ? "selected" : ""}>留货订单</option></select></label>`;
-  if (type === "textarea") return `<label class="wide"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><textarea name="${key}" ${disabled ? "disabled" : ""}>${escapeHtml(value)}</textarea></label>`;
-  return `<label><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><input name="${key}" type="${type || "text"}" value="${escapeHtml(value)}" ${disabled ? "disabled" : ""}></label>`;
+  if (type === "select") return `<label class="stock-field-${key}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><select name="${key}" ${disabled ? "disabled" : ""}><option ${value === "备货订单" ? "selected" : ""}>备货订单</option><option ${value === "留货订单" ? "selected" : ""}>留货订单</option></select></label>`;
+  if (type === "textarea") return `<label class="wide stock-field-${key}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><textarea name="${key}" ${disabled ? "disabled" : ""}>${escapeHtml(value)}</textarea></label>`;
+  return `<label class="stock-field-${key}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><input name="${key}" type="${type || "text"}" value="${escapeHtml(value)}" ${disabled ? "disabled" : ""}></label>`;
 }
 
 function renderStockForm() {
@@ -1057,7 +1089,8 @@ function renderStockForm() {
     const moduleDone = module === "sales" ? stockCurrent.sales_completed_at : done;
     const canComplete = stockMode === "edit" && stockCurrent.id && (!hold || module === "sales") && !cancelled && stockCurrent.editableModules.includes(module) && !moduleDone;
     const recognize = stockMode === "edit" && ["sales","purchase"].includes(module) && stockCurrent.editableModules.includes(module) && (!moduleDone || stockCurrent.isAdmin) ? `<button type="button" data-stock-recognize="${module}">粘贴并识别</button>` : "";
-    return `<section class="stock-module"><div class="stock-module-head"><h4>${title}</h4><div>${recognize}${moduleDone ? `<span class="stock-state done">完成于 ${escapeHtml(moduleDone.slice(0,16).replace("T"," "))}</span>` : (canComplete ? `<button type="button" data-stock-complete="${module}">完成确认</button>` : "")}</div></div><div class="stock-form-grid ${stockMode === "view" ? "stock-view-grid" : ""}">${fields.map(renderStockField).join("")}</div></section>`;
+    const canSaveModule = stockMode === "edit" && stockCurrent.id && (!hold || module === "sales") && !cancelled && stockCurrent.editableModules.includes(module) && (!moduleDone || stockCurrent.isAdmin);
+    return `<section class="stock-module"><div class="stock-module-head"><h4>${title}</h4><div class="stock-module-actions">${recognize}${canSaveModule ? `<button class="stock-module-save" type="button" data-stock-save-module="${module}">保存</button>` : ""}${moduleDone ? `<span class="stock-state done">完成于 ${escapeHtml(moduleDone.slice(0,16).replace("T"," "))}</span>` : (canComplete ? `<button type="button" data-stock-complete="${module}">完成确认</button>` : "")}</div></div><div class="stock-form-grid ${stockMode === "view" ? "stock-view-grid" : ""}">${fields.map(renderStockField).join("")}</div></section>`;
   }).join("")}</div>${stockMode === "edit" && stockCurrent.isAdmin ? '<label class="stock-reason"><span>管理员修正原因（修改跨日锁定字段时必填）</span><input name="reason"></label>' : ''}<div class="stock-form-footer"><span></span><div><button type="button" data-stock-close onclick="closeStockOrder()">关闭</button>${stockMode === "edit" && !cancelled && stockUser.permissions?.updateStockOrders ? '<button class="primary" type="submit">保存</button>' : ''}</div></div></form>`;
 }
 
@@ -1087,7 +1120,7 @@ function recognizeStockText(module) {
   });
   let purchaseRows = [];
   if (module === "purchase") {
-    const dataRows = rows.filter(parts => !/原料|物料/.test(parts[0]) || parts.length < 2);
+    const dataRows = rows.filter(parts => !["原料", "物料"].includes(parts[0]) || parts.length < 2);
     purchaseRows = dataRows.filter(parts => parts.length >= 2).map(parts => ({material:parts[0], quantity:parts[1]}));
   }
   const labels = Object.entries(assignments).map(([key,value]) => `${STOCK_GROUPS.flatMap(g => g[2]).find(field => field[0] === key)?.[1] || key}：${value}`);
@@ -1101,10 +1134,11 @@ function recognizeStockText(module) {
   if (purchaseRows.length) $("#stock-purchase-item-rows").innerHTML = purchaseRows.map(item => purchaseItemRow(item)).join("");
 }
 
-function collectStockFields(form) {
+function collectStockFields(form, onlyModule = null) {
   const fields = {};
   const isHoldOrder = form.elements.order_type?.value === "留货订单";
   STOCK_GROUPS.forEach(([,module,moduleFields]) => moduleFields.forEach(([key,,type]) => {
+    if (onlyModule && module !== onlyModule) return;
     if (isHoldOrder && module !== "sales") return;
     const input = form.elements[key];
     if (!input || input.disabled) return;
@@ -1112,8 +1146,17 @@ function collectStockFields(form) {
   }));
   const purchaseContainer = document.querySelector(".stock-purchase-items");
   const purchaseRows = [...document.querySelectorAll(".stock-purchase-row")].filter(row => !row.querySelector("input")?.disabled).map(row => ({material:row.querySelector("[data-purchase-material]").value.trim(), quantity:row.querySelector("[data-purchase-quantity]").value.trim()})).filter(x => x.material || x.quantity);
-  if (!isHoldOrder && purchaseContainer?.dataset.disabled === "false" && stockMode === "edit" && (purchaseRows.length || stockCurrent.purchase_items)) fields.purchase_items = JSON.stringify(purchaseRows);
+  if ((!onlyModule || onlyModule === "purchase") && !isHoldOrder && purchaseContainer?.dataset.disabled === "false" && stockMode === "edit" && (purchaseRows.length || stockCurrent.purchase_items)) fields.purchase_items = JSON.stringify(purchaseRows);
   return fields;
+}
+
+async function saveStockModule(module) {
+  const form = $("#stock-order-form");
+  try {
+    const data = await stockApi(`/api/stock-orders/${stockCurrent.id}`, {method:"PUT", body:JSON.stringify({fields:collectStockFields(form, module), reason:form.elements.reason?.value || ""})});
+    await loadStockOrders();
+    await openStockOrder(data.order.id, "edit");
+  } catch (err) { alert(err.message); }
 }
 
 async function saveStockOrder(event) {
@@ -1147,6 +1190,13 @@ function closeStockOrder() { $("#stock-modal-mask").classList.remove("active"); 
 window.closeStockOrder = closeStockOrder;
 
 async function openStockHistory() { $("#stock-history-mask").classList.add("active"); await loadStockHistory(); }
+async function openOrderStockHistory(orderNo) {
+  $("#stock-history-order").value = orderNo;
+  $("#stock-history-operator").value = "";
+  $("#stock-history-month").value = "";
+  await openStockHistory();
+}
+window.openOrderStockHistory = openOrderStockHistory;
 async function loadStockHistory() {
   const params = stockHistoryParams();
   try { const data = await stockApi("/api/stock-orders-history?" + params); stockHistory = data.logs; $("#stock-history-rows").innerHTML = stockHistory.length ? stockHistory.map(log => `<tr><td>${escapeHtml(log.operatedAt.replace("T"," ").slice(0,19))}</td><td>${escapeHtml(log.orderNo)}</td><td>${escapeHtml(log.module)} / ${escapeHtml(log.label)}</td><td class="stock-log-detail">${escapeHtml(log.newValue)}</td><td>${escapeHtml(log.operator)}</td><td>${escapeHtml(log.reason || "—")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">暂无记录</td></tr>'; } catch(err) { alert(err.message); }

@@ -34,7 +34,7 @@ from app.db.models import (
     StockOrderChangeLog, StockOrderFieldUpdate, StockOrderWarning, User,
 )
 from app.services.stock_orders import (
-    FIELD_META, MODULES, business_date, can_edit_module, clean_fields, field_locks, is_admin,
+    FIELD_META, MODULES, business_date, business_datetime, can_edit_module, clean_fields, field_locks, is_admin,
     order_payload, sync_order_warnings, user_modules,
 )
 from app.services.export import build_workbook
@@ -165,7 +165,7 @@ def _user_payload(user: User) -> dict:
             "viewActivityLogs": _has_permission(user, "can_view_activity_logs"),
             "manageUsers": _has_permission(user, "can_manage_users"),
         },
-        "lastActivityAt": user.last_activity_at.isoformat() if user.last_activity_at else None,
+        "lastActivityAt": business_datetime(user.last_activity_at) or None,
     }
 
 
@@ -528,9 +528,9 @@ async def api_users(request: Request, db: Session = Depends(get_db)):
                 "status": "active" if user.is_active and user.password_hash else "pending",
                 "isActive": user.is_active,
                 "hasPassword": bool(user.password_hash),
-                "invitedAt": user.invited_at.isoformat() if user.invited_at else None,
-                "passwordSetAt": user.password_set_at.isoformat() if user.password_set_at else None,
-                "lastActivityAt": user.last_activity_at.isoformat() if user.last_activity_at else None,
+                "invitedAt": business_datetime(user.invited_at) or None,
+                "passwordSetAt": business_datetime(user.password_set_at) or None,
+                "lastActivityAt": business_datetime(user.last_activity_at) or None,
             }
             for user in users
         ]
@@ -702,7 +702,7 @@ async def api_activity_logs(request: Request, db: Session = Depends(get_db)):
                 "id": log.id,
                 "userId": log.user_id,
                 "userEmail": log.user.email if log.user else "",
-                "activityTime": log.activity_time.isoformat(),
+                "activityTime": business_datetime(log.activity_time),
                 "action": log.action,
                 "target": log.target,
                 "detail": log.detail,
@@ -801,7 +801,8 @@ def _sync_stock_warnings(db: Session, orders: list[StockOrder]) -> dict[int, lis
 
 @app.get("/api/stock-orders")
 async def api_stock_orders(request: Request, q: str = "", order_type: str = "", incomplete: str = "",
-                           date_from: str = "", date_to: str = "", db: Session = Depends(get_db)):
+                           date_from: str = "", date_to: str = "", page: int = 1,
+                           page_size: int = 10, db: Session = Depends(get_db)):
     _require_permission(request, db, "can_view_stock_orders")
     query = db.query(StockOrder).filter(StockOrder.deleted_at.is_(None))
     if q.strip():
@@ -811,9 +812,9 @@ async def api_stock_orders(request: Request, q: str = "", order_type: str = "", 
     if order_type:
         query = query.filter(StockOrder.order_type == order_type)
     if date_from:
-        query = query.filter(StockOrder.updated_at >= datetime.fromisoformat(date_from))
+        query = query.filter(StockOrder.updated_at >= datetime.fromisoformat(date_from) - timedelta(hours=settings.business_utc_offset_hours))
     if date_to:
-        query = query.filter(StockOrder.updated_at < datetime.fromisoformat(date_to + "T23:59:59"))
+        query = query.filter(StockOrder.updated_at < datetime.fromisoformat(date_to) + timedelta(days=1) - timedelta(hours=settings.business_utc_offset_hours))
     if incomplete:
         key = incomplete.lower()
         query = query.filter(StockOrder.archive_status != "已取消")
@@ -827,20 +828,18 @@ async def api_stock_orders(request: Request, q: str = "", order_type: str = "", 
             "sales": StockOrder.actual_delivery == "",
             "销售": StockOrder.actual_delivery == "",
         }
-        if key in {"全部", "all"}:
-            query = query.filter(or_(
-                StockOrder.actual_delivery == "",
-                StockOrder.purchase_completed_at.is_(None),
-                StockOrder.production_completed_at.is_(None),
-                StockOrder.qc_completed_at.is_(None),
-            ))
-        elif key in incomplete_filters:
+        if key in incomplete_filters:
             query = query.filter(incomplete_filters[key])
-    rows = query.order_by(StockOrder.updated_at.desc(), StockOrder.id.desc()).limit(500).all()
+    page = max(page, 1)
+    page_size = 10
+    total = query.count()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(page, total_pages)
+    rows = query.order_by(StockOrder.updated_at.desc(), StockOrder.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
     warnings_by_order = _sync_stock_warnings(db, rows)
     payloads = [order_payload(db, row, warning_rows=warnings_by_order[row.id]) for row in rows]
     db.commit()
-    return {"orders": payloads}
+    return {"orders": payloads, "pagination": {"page": page, "pageSize": page_size, "total": total, "totalPages": total_pages}}
 
 
 @app.get("/api/stock-orders/{order_id}")
@@ -1007,7 +1006,7 @@ async def api_stock_order_history(request: Request, order: str = "", operator: s
         query = query.filter(StockOrderChangeLog.operator_name.like(f"%{operator}%"))
     if month:
         try:
-            start = datetime.strptime(month, "%Y-%m")
+            start = datetime.strptime(month, "%Y-%m") - timedelta(hours=settings.business_utc_offset_hours)
             end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
         except ValueError as exc:
             raise HTTPException(400, "月份格式无效") from exc
@@ -1016,7 +1015,7 @@ async def api_stock_order_history(request: Request, order: str = "", operator: s
     return {"logs": [{
         "id": row.id, "orderNo": row.order_no, "module": row.module, "action": row.action,
         "label": row.field_label, "oldValue": row.old_value, "newValue": row.new_value,
-        "operator": row.operator_name, "operatedAt": row.operated_at.isoformat(), "reason": row.reason,
+        "operator": row.operator_name, "operatedAt": business_datetime(row.operated_at), "reason": row.reason,
     } for row in logs]}
 
 
@@ -1029,7 +1028,7 @@ def _stock_export_orders(db: Session, order: str, operator: str, month: str):
         query = query.filter(StockOrder.id.in_(ids))
     if month:
         try:
-            start = datetime.strptime(month, "%Y-%m")
+            start = datetime.strptime(month, "%Y-%m") - timedelta(hours=settings.business_utc_offset_hours)
             end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
         except ValueError as exc:
             raise HTTPException(400, "月份格式无效") from exc
@@ -1058,18 +1057,18 @@ async def api_stock_order_export(kind: str, request: Request, order: str = "", o
     if kind == "orders":
         rows = [["订单号","订单类型","创建时间","内部简称","CAS","数量","业务员","客户名称","提需求日期","交货期需求","实际交货","采购明细","采购预计到货","生产预计完成","QC预计完成","销售完成","采购完成","生产完成","QC完成","订单状态","取消原因"]]
         for item in orders:
-            rows.append([item.order_no,item.order_type,item.created_at,item.internal_name,item.cas,item.quantity,item.salesperson,item.customer_name,item.demand_date,item.delivery_requirement,item.actual_delivery,item.purchase_items,item.arrival_date,item.expected_delivery_date,item.coa_time,item.sales_completed_at,item.purchase_completed_at,item.production_completed_at,item.qc_completed_at,item.archive_status,item.cancelled_reason])
+            rows.append([item.order_no,item.order_type,business_datetime(item.created_at),item.internal_name,item.cas,item.quantity,item.salesperson,item.customer_name,item.demand_date,item.delivery_requirement,item.actual_delivery,item.purchase_items,item.arrival_date,item.expected_delivery_date,item.coa_time,business_datetime(item.sales_completed_at),business_datetime(item.purchase_completed_at),business_datetime(item.production_completed_at),business_datetime(item.qc_completed_at),item.archive_status,item.cancelled_reason])
         filename = "备货订单.csv"
     elif kind == "performance":
         warnings = db.query(StockOrderWarning).filter(StockOrderWarning.order_id.in_(order_ids or [-1])).order_by(StockOrderWarning.occurred_at).all()
-        rows = [["订单号","责任部门","预警类型","预警内容","截止时间","预警时间","详情"], *[[w.order_no,w.department,w.warning_type,w.message,w.threshold_at,w.occurred_at,w.detail] for w in warnings]]
+        rows = [["订单号","责任部门","预警类型","预警内容","截止时间","预警时间","详情"], *[[w.order_no,w.department,w.warning_type,w.message,business_datetime(w.threshold_at),business_datetime(w.occurred_at),w.detail] for w in warnings]]
         filename = "备货订单绩效.csv"
     elif kind == "changes":
         query = db.query(StockOrderChangeLog).filter(StockOrderChangeLog.order_id.in_(order_ids or [-1]))
         if operator:
             query = query.filter(StockOrderChangeLog.operator_name.like(f"%{operator}%"))
         logs = query.order_by(StockOrderChangeLog.operated_at).all()
-        rows = [["时间","订单号","模块","动作","字段","原内容","新内容","操作人","修改说明"], *[[x.operated_at,x.order_no,x.module,x.action,x.field_label,x.old_value,x.new_value,x.operator_name,x.reason] for x in logs]]
+        rows = [["时间","订单号","模块","动作","字段","原内容","新内容","操作人","修改说明"], *[[business_datetime(x.operated_at),x.order_no,x.module,x.action,x.field_label,x.old_value,x.new_value,x.operator_name,x.reason] for x in logs]]
         filename = "备货订单修改记录.csv"
     else:
         raise HTTPException(404, "导出类型不存在")

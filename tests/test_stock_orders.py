@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 os.environ.setdefault("BOYUAN_DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("BOYUAN_SESSION_SECRET", "unit-test-secret")
@@ -14,6 +14,7 @@ from sqlalchemy import event
 from app.auth import utcnow
 from app.db.models import Role, StockOrder, StockOrderWarning, User
 from app.main import SessionLocal, StockOrderPayload, _save_stock_order, _sync_stock_warnings, engine
+from app.services.stock_orders import business_datetime, module_status, sync_order_warnings
 
 
 class StockOrderRegressionTests(unittest.TestCase):
@@ -90,6 +91,29 @@ class StockOrderRegressionTests(unittest.TestCase):
         self.assertEqual(warning_selects, 2)
         self.assertTrue(all(len(grouped[order.id]) == 2 for order in orders))
         self.assertEqual(self.db.query(StockOrderWarning).count(), 6)
+
+    def test_business_timestamps_are_serialized_as_beijing_time(self) -> None:
+        self.assertEqual(business_datetime(datetime(2026, 7, 13, 20, 30)), "2026-07-14T04:30:00")
+
+    def test_module_status_distinguishes_unfilled_in_progress_and_complete(self) -> None:
+        order = StockOrder(order_no="TEST-THREE-STATES")
+        self.assertEqual(module_status(order, "purchase"), "未填写")
+        order.purchase_note = "已开始填写"
+        self.assertEqual(module_status(order, "purchase"), "进行中")
+        order.purchase_completed_at = utcnow()
+        self.assertEqual(module_status(order, "purchase"), "已完成")
+
+    def test_late_actual_delivery_creates_sales_warning(self) -> None:
+        order = StockOrder(
+            order_no="TEST-LATE-DELIVERY", order_type="备货订单",
+            delivery_requirement="2026-07-10", actual_delivery="2026-07-11",
+        )
+        self.db.add(order)
+        self.db.flush()
+        sync_order_warnings(self.db, order, existing_types=set())
+        self.db.flush()
+        warning = self.db.query(StockOrderWarning).filter_by(order_id=order.id, warning_type="sales_delivery_late").one()
+        self.assertEqual(warning.department, "销售部")
 
 
 if __name__ == "__main__":
