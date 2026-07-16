@@ -156,13 +156,13 @@ def sync_order_warnings(
             ("production", "生产部", order.production_responded_at),
         ):
             if (responded and responded > deadline) or (not responded and now > deadline):
-                add(f"{module}_response_24h", department, f"{department}未在销售完成后24小时内填写", deadline)
+                add(f"{module}_response_24h", department, f"{department}未完成(24h)", deadline)
 
     if order.purchase_responded_at and order.production_responded_at:
         qc_start = max(order.purchase_responded_at, order.production_responded_at)
         deadline = qc_start + timedelta(hours=12)
         if (order.qc_responded_at and order.qc_responded_at > deadline) or (not order.qc_responded_at and now > deadline):
-            add("qc_response_12h", "质量部", "质量部未在采购和生产填写后12小时内填写", deadline)
+            add("qc_response_12h", "质量部", "质量部未完成(12h)", deadline)
 
     date_checks = (
         ("sales_delivery_late", "销售部", order.actual_delivery, order.delivery_requirement, True, "交货超时"),
