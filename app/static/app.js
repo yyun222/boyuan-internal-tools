@@ -1141,7 +1141,7 @@ function stockState(order, module) {
     const completed = module === "sales" ? (order.sales_completed_at || order.actual_delivery) : order[`${module}_completed_at`];
     return completed ? '<span class="stock-state done">已完成</span>' : '<span class="stock-state muted-state">—</span>';
   }
-  if (order.order_type === "留货订单" && module !== "sales") return '<span class="stock-state muted-state">无需处理</span>';
+  if (order.order_type === "现货留货" && module !== "sales") return '<span class="stock-state muted-state">无需处理</span>';
   const department = {sales:"销售部",purchase:"采购部",production:"生产部",qc:"质量部"}[module];
   const warning = order.warnings?.find(item => item.department === department);
   if (warning) return `<span class="stock-state late">${escapeHtml(warning.message)}</span>`;
@@ -1186,7 +1186,7 @@ function renderStockField([key,label,type]) {
   const module = STOCK_GROUPS.find(group => group[2].some(field => field[0] === key))?.[1] || "sales";
   const locked = stockCurrent.locks?.[key];
   const completed = module === "sales" ? stockCurrent.sales_completed_at : stockCurrent[`${module}_completed_at`];
-  const holdModule = stockCurrent.order_type === "留货订单" && module !== "sales";
+  const holdModule = stockCurrent.order_type === "现货留货" && module !== "sales";
   const disabled = stockMode === "view" || holdModule || !stockUser.permissions?.updateStockOrders || !stockCurrent.editableModules.includes(module) || (completed && !stockCurrent.isAdmin) || (locked && !stockCurrent.isAdmin) || stockCurrent.archive_status === "已取消";
   if (stockMode === "view") {
     let shown = value || "—";
@@ -1201,13 +1201,13 @@ function renderStockField([key,label,type]) {
     return `<div class="wide stock-purchase-items" data-disabled="${disabled ? "true" : "false"}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><div id="stock-purchase-item-rows">${items.map(item => purchaseItemRow(item, disabled)).join("")}</div>${disabled ? "" : '<button id="stock-add-purchase-row" type="button">添加一行</button>'}</div>`;
   }
   if (type === "checkbox") return `<label class="stock-check"><input name="${key}" type="checkbox" ${value ? "checked" : ""} ${disabled ? "disabled" : ""}>${label}${locked ? ' <em>已锁定</em>' : ''}</label>`;
-  if (type === "select") return `<label class="stock-field-${key}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><select name="${key}" ${disabled ? "disabled" : ""}><option ${value === "备货订单" ? "selected" : ""}>备货订单</option><option ${value === "留货订单" ? "selected" : ""}>留货订单</option></select></label>`;
+  if (type === "select") return `<label class="stock-field-${key}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><select name="${key}" ${disabled ? "disabled" : ""}><option ${value === "备货订单" ? "selected" : ""}>备货订单</option><option ${value === "现货留货" ? "selected" : ""}>现货留货</option></select></label>`;
   if (type === "textarea") return `<label class="wide stock-field-${key}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><textarea name="${key}" ${disabled ? "disabled" : ""}>${escapeHtml(value)}</textarea></label>`;
   return `<label class="stock-field-${key}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><input name="${key}" type="${type || "text"}" value="${escapeHtml(value)}" ${disabled ? "disabled" : ""}></label>`;
 }
 
 function renderStockForm() {
-  const hold = stockCurrent.order_type === "留货订单";
+  const hold = stockCurrent.order_type === "现货留货";
   const cancelled = stockCurrent.archive_status === "已取消";
   return `<form id="stock-order-form"><div class="stock-modules">${STOCK_GROUPS.map(([title,module,fields]) => {
     const done = stockCurrent[`${module}_completed_at`];
@@ -1261,7 +1261,7 @@ function recognizeStockText(module) {
 
 function collectStockFields(form, onlyModule = null) {
   const fields = {};
-  const isHoldOrder = form.elements.order_type?.value === "留货订单";
+  const isHoldOrder = form.elements.order_type?.value === "现货留货";
   STOCK_GROUPS.forEach(([,module,moduleFields]) => moduleFields.forEach(([key,,type]) => {
     if (onlyModule && module !== onlyModule) return;
     if (isHoldOrder && module !== "sales") return;

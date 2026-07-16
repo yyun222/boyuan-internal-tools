@@ -60,13 +60,13 @@ class StockOrderRegressionTests(unittest.TestCase):
 
     def test_hold_order_ignores_unchanged_other_module_defaults(self) -> None:
         order = _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
-            "order_type": "留货订单",
+            "order_type": "现货留货",
             "internal_name": "留货产品",
             "purchase_note": "",
             "production_note": "",
             "qc_note": "",
         }))
-        self.assertEqual(order.order_type, "留货订单")
+        self.assertEqual(order.order_type, "现货留货")
 
     def test_warning_refresh_uses_constant_query_count(self) -> None:
         orders = [

@@ -109,7 +109,7 @@ def field_locks(db, order: StockOrder) -> dict[str, bool]:
 
 
 def overdue(order: StockOrder) -> dict[str, str]:
-    if order.archive_status == "已取消" or order.order_type == "留货订单":
+    if order.archive_status == "已取消" or order.order_type == "现货留货":
         return {}
     today = business_date()
     result = {}
@@ -132,7 +132,7 @@ def sync_order_warnings(
     existing_types: set[str] | None = None,
 ) -> None:
     """Materialize each warning once so later performance exports remain auditable."""
-    if order.archive_status == "已取消" or order.order_type == "留货订单":
+    if order.archive_status == "已取消" or order.order_type == "现货留货":
         return
     now = now or utcnow()
     existing = existing_types if existing_types is not None else {

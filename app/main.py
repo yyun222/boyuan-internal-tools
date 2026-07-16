@@ -925,32 +925,32 @@ async def api_stock_orders(request: Request, q: str = "", order_type: str = "", 
             "purchase": and_(
                 StockOrder.purchase_completed_at.is_(None),
                 StockOrder.purchase_not_required.is_(False),
-                StockOrder.order_type != "留货订单",
+                StockOrder.order_type != "现货留货",
             ),
             "采购": and_(
                 StockOrder.purchase_completed_at.is_(None),
                 StockOrder.purchase_not_required.is_(False),
-                StockOrder.order_type != "留货订单",
+                StockOrder.order_type != "现货留货",
             ),
             "production": and_(
                 StockOrder.production_completed_at.is_(None),
                 StockOrder.production_not_required.is_(False),
-                StockOrder.order_type != "留货订单",
+                StockOrder.order_type != "现货留货",
             ),
             "生产": and_(
                 StockOrder.production_completed_at.is_(None),
                 StockOrder.production_not_required.is_(False),
-                StockOrder.order_type != "留货订单",
+                StockOrder.order_type != "现货留货",
             ),
             "qc": and_(
                 StockOrder.qc_completed_at.is_(None),
                 StockOrder.qc_not_required.is_(False),
-                StockOrder.order_type != "留货订单",
+                StockOrder.order_type != "现货留货",
             ),
             "质量": and_(
                 StockOrder.qc_completed_at.is_(None),
                 StockOrder.qc_not_required.is_(False),
-                StockOrder.order_type != "留货订单",
+                StockOrder.order_type != "现货留货",
             ),
             "sales": StockOrder.actual_delivery == "",
             "销售": StockOrder.actual_delivery == "",
@@ -1023,8 +1023,8 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
             continue
         if not can_edit_module(user, module):
             raise HTTPException(403, f"当前角色不能修改{FIELD_META[key][0]}字段")
-        if order.order_type == "留货订单" and module in {"purchase", "production", "qc"}:
-            raise HTTPException(400, "留货订单无需采购、生产和QC填写")
+        if order.order_type == "现货留货" and module in {"purchase", "production", "qc"}:
+            raise HTTPException(400, "现货留货无需采购、生产和QC填写")
         done_key = "sales_completed_at" if module == "sales" else next((values[1] for name, values in MODULES.items() if name == module), None)
         if done_key and getattr(order, done_key) and not is_admin(user):
             raise HTTPException(403, f"{FIELD_META[key][0]}已完成确认")
@@ -1092,7 +1092,7 @@ async def api_complete_stock_order(order_id: int, payload: StockCompletePayload,
     order = db.query(StockOrder).filter_by(id=order_id, deleted_at=None).one_or_none()
     if not order:
         raise HTTPException(404, "订单不存在")
-    if order.archive_status == "已取消" or (order.order_type == "留货订单" and payload.module != "sales"):
+    if order.archive_status == "已取消" or (order.order_type == "现货留货" and payload.module != "sales"):
         raise HTTPException(400, "该订单不能完成此模块")
     if payload.module == "sales":
         due_key, done_key, skip_key, label = "", "sales_completed_at", "", "销售填写完成"
