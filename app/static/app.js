@@ -1275,11 +1275,62 @@ function collectStockFields(form, onlyModule = null) {
   return fields;
 }
 
+function stockOrderSummary(order) {
+  return [
+    ["备货订单号", order.order_no],
+    ["内部简称", order.internal_name],
+    ["CAS", order.cas],
+    ["数量", order.quantity],
+    ["业务员", order.salesperson],
+    ["提需求日期", order.demand_date],
+    ["客户名称", order.customer_name],
+    ["订单情况", order.order_situation],
+    ["质量要求", order.quality_requirement],
+    ["交货期需求", order.delivery_requirement],
+    ["销售其他说明", order.sales_note],
+  ].map(([label, value]) => `${label}：${value || ""}`).join("\n");
+}
+
+async function copyStockOrderSummary(text, button) {
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      if (!document.execCommand("copy")) throw new Error("copy failed");
+      textarea.remove();
+    }
+    button.textContent = "已复制";
+    setTimeout(() => { button.textContent = "复制内容"; }, 1600);
+  } catch (_) {
+    alert("复制失败，请手动选择并复制内容");
+  }
+}
+
+function showStockOrderSaved(order) {
+  const summary = stockOrderSummary(order);
+  stockCurrent = order;
+  $("#stock-modal-number").textContent = order.order_no;
+  $("#stock-modal-body").innerHTML = `<div class="stock-save-result"><div class="stock-save-success"><span class="stock-save-check">✓</span><div><strong>订单已保存！</strong><p>订单信息已成功提交，可以复制下方内容发送给相关人员。</p></div></div><div class="stock-save-summary"><div class="stock-save-summary-head"><div><strong>订单信息</strong><span>${escapeHtml(order.order_no)}</span></div><button type="button" id="stock-copy-summary">复制内容</button></div><pre>${escapeHtml(summary)}</pre></div><div class="stock-save-result-actions"><button type="button" onclick="closeStockOrder()">完成并关闭</button></div></div>`;
+  $("#stock-copy-summary").addEventListener("click", event => copyStockOrderSummary(summary, event.currentTarget));
+  $("#stock-modal-body").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
 async function saveStockModule(module) {
   const form = $("#stock-order-form");
   try {
     const creating = !stockCurrent.id;
-    await stockApi(creating ? "/api/stock-orders" : `/api/stock-orders/${stockCurrent.id}`, {method:creating ? "POST" : "PUT", body:JSON.stringify({fields:collectStockFields(form, module), reason:form.elements.reason?.value || ""})});
+    const data = await stockApi(creating ? "/api/stock-orders" : `/api/stock-orders/${stockCurrent.id}`, {method:creating ? "POST" : "PUT", body:JSON.stringify({fields:collectStockFields(form, module), reason:form.elements.reason?.value || ""})});
+    if (creating) {
+      showStockOrderSaved(data.order);
+      await loadStockOrders();
+      return;
+    }
     closeStockOrder();
     await loadStockOrders();
   } catch (err) { alert(err.message); }
@@ -1289,7 +1340,13 @@ async function saveStockOrder(event) {
   event.preventDefault();
   const form = event.target;
   try {
-    await stockApi(stockCurrent.id ? `/api/stock-orders/${stockCurrent.id}` : "/api/stock-orders", {method:stockCurrent.id ? "PUT" : "POST", body:JSON.stringify({fields:collectStockFields(form), reason:form.elements.reason?.value || ""})});
+    const creating = !stockCurrent.id;
+    const data = await stockApi(creating ? "/api/stock-orders" : `/api/stock-orders/${stockCurrent.id}`, {method:creating ? "POST" : "PUT", body:JSON.stringify({fields:collectStockFields(form), reason:form.elements.reason?.value || ""})});
+    if (creating) {
+      showStockOrderSaved(data.order);
+      await loadStockOrders();
+      return;
+    }
     closeStockOrder();
     await loadStockOrders();
   } catch (err) { alert(err.message); }

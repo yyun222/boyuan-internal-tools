@@ -957,6 +957,22 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
 .stock-pagination button:disabled { opacity:.45; cursor:not-allowed; }
 .stock-module-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
 .stock-module-save { color:#0071e3 !important; border-color:#8dbce8 !important; }
+.stock-save-result { width:min(720px,100%); margin:0 auto; padding:30px 24px 26px; }
+.stock-save-success { display:flex; align-items:center; gap:14px; margin-bottom:18px; padding:18px 20px; border:1px solid #a8dec8; border-radius:14px; background:linear-gradient(135deg,#effaf5,#e7f7ef); color:#075f45; }
+.stock-save-check { display:inline-flex; align-items:center; justify-content:center; flex:0 0 42px; width:42px; height:42px; border-radius:50%; background:#0a8f65; color:#fff; font-size:23px; font-weight:700; box-shadow:0 7px 18px rgba(10,143,101,.2); }
+.stock-save-success strong { display:block; margin-bottom:2px; font-size:18px; }
+.stock-save-success p { margin:0; color:#3d715f; font-size:13px; }
+.stock-save-summary { overflow:hidden; border:1px solid #dedee3; border-radius:14px; background:#fff; box-shadow:0 8px 28px rgba(0,0,0,.055); }
+.stock-save-summary-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 18px; border-bottom:1px solid #e8e8ed; background:#fbfbfc; }
+.stock-save-summary-head > div { display:flex; flex-direction:column; gap:2px; }
+.stock-save-summary-head strong { font-size:15px; }
+.stock-save-summary-head span { color:#86868b; font-size:12px; }
+.stock-save-summary-head button { padding:8px 14px; border:1px solid #0a8f65; border-radius:8px; background:#fff; color:#087f5b; font-weight:600; }
+.stock-save-summary-head button:hover:not(:disabled) { border-color:#087f5b; background:#087f5b; color:#fff; box-shadow:0 5px 14px rgba(8,127,91,.18); }
+.stock-save-summary pre { margin:0; padding:19px 20px 21px; color:#2c2c2e; font:14px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; white-space:pre-wrap; overflow-wrap:anywhere; }
+.stock-save-result-actions { display:flex; justify-content:flex-end; margin-top:18px; }
+.stock-save-result-actions button { padding:9px 17px; border:1px solid #d2d2d7; border-radius:9px; background:#fff; color:#3a3a3c; }
+.stock-save-result-actions button:hover:not(:disabled) { border-color:#aaaab0; background:#f5f5f7; color:#1d1d1f; box-shadow:none; transform:none; }
 .asset-form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(180px, 1fr));
