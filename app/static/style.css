@@ -953,7 +953,8 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
 .stock-pagination .stock-page-summary { align-items:center; gap:16px; }
 .stock-page-summary label { display:flex; align-items:center; gap:6px; }
 .stock-page-summary select { border:1px solid #d2d2d7; border-radius:7px; padding:6px 24px 6px 8px; background:#fff; color:#1d1d1f; }
-.stock-pagination button { border:1px solid #d2d2d7; background:#fff; border-radius:8px; padding:7px 12px; cursor:pointer; }
+.stock-pagination button { border:1px solid #d2d2d7; background:#fff; color:#1d1d1f; border-radius:8px; padding:7px 12px; cursor:pointer; }
+.stock-pagination button:hover:not(:disabled) { border-color:#a8a8ad; background:#f5f5f7; color:#1d1d1f; box-shadow:none; transform:none; }
 .stock-pagination button:disabled { opacity:.45; cursor:not-allowed; }
 .stock-module-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
 .stock-module-save { color:#0071e3 !important; border-color:#8dbce8 !important; }
