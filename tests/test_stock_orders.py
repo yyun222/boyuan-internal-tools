@@ -13,7 +13,7 @@ from sqlalchemy import event
 
 from app.auth import utcnow
 from app.db.models import Role, StockOrder, StockOrderWarning, User
-from app.main import SessionLocal, StockOrderPayload, _save_stock_order, _stock_month_range, _sync_stock_warnings, engine
+from app.main import SessionLocal, StockOrderPayload, _save_stock_order, _stock_month_range, _sync_stock_warnings, _validate_stock_completion_quantities, engine
 from app.services.stock_orders import business_datetime, module_status, sync_order_warnings
 
 
@@ -108,9 +108,9 @@ class StockOrderRegressionTests(unittest.TestCase):
         order.purchase_completed_at = utcnow()
         self.assertEqual(module_status(order, "purchase"), "已完成")
 
-    def test_saving_actual_delivery_automatically_completes_sales(self) -> None:
+    def test_sales_completion_requires_matching_delivery_total(self) -> None:
         order = StockOrder(
-            order_no="TEST-AUTO-COMPLETE-SALES", internal_name="产品A",
+            order_no="TEST-COMPLETE-SALES", internal_name="产品A", quantity="1 kg",
             order_type="备货订单", created_by_user_id=self.admin.id,
         )
         self.db.add(order)
@@ -118,11 +118,67 @@ class StockOrderRegressionTests(unittest.TestCase):
 
         saved = _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
             "actual_delivery": "2026-07-20",
+            "delivery_items": '[{"quantity":"1000 g","note":"一次性交付"}]',
         }), order)
 
         self.assertEqual(saved.actual_delivery, "2026-07-20")
-        self.assertIsNotNone(saved.sales_completed_at)
-        self.assertEqual(module_status(saved, "sales"), "已完成")
+        self.assertIsNone(saved.sales_completed_at)
+        _validate_stock_completion_quantities(saved, "sales")
+
+        saved.delivery_items = '[{"quantity":"999 g","note":"数量不足"}]'
+        with self.assertRaisesRegex(Exception, "总数量"):
+            _validate_stock_completion_quantities(saved, "sales")
+
+    def test_delivery_fields_must_be_all_filled_or_all_empty(self) -> None:
+        order = StockOrder(order_no="TEST-DELIVERY-VALIDATION", order_type="备货订单")
+        self.db.add(order)
+        self.db.flush()
+
+        with self.assertRaisesRegex(Exception, "必须填写"):
+            _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+                "actual_delivery": "2026-07-20",
+                "delivery_items": '[{"quantity":"10 kg","note":""}]',
+            }), order)
+
+    def test_purchase_arrival_items_require_complete_rows(self) -> None:
+        order = StockOrder(order_no="TEST-ARRIVAL-VALIDATION", order_type="备货订单")
+        self.db.add(order)
+        self.db.flush()
+
+        with self.assertRaisesRegex(Exception, "日期、原料、数量和备注"):
+            _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+                "purchase_arrival_items": '[{"date":"2026-07-20","material":"原料A","quantity":"10 kg","note":""}]',
+            }), order)
+
+    def test_purchase_items_require_expected_arrival_date(self) -> None:
+        order = StockOrder(order_no="TEST-PURCHASE-ITEM-VALIDATION", order_type="备货订单")
+        self.db.add(order)
+        self.db.flush()
+
+        with self.assertRaisesRegex(Exception, "预计到货时间"):
+            _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+                "purchase_items": '[{"arrival_date":"","material":"原料A","quantity":"10 kg"}]',
+            }), order)
+
+    def test_production_items_require_complete_rows(self) -> None:
+        order = StockOrder(order_no="TEST-PRODUCTION-ITEM-VALIDATION", order_type="备货订单")
+        self.db.add(order)
+        self.db.flush()
+
+        with self.assertRaisesRegex(Exception, "生产数量和备注"):
+            _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+                "production_actual_items": '[{"date":"2026-07-20","quantity":"10 kg","note":""}]',
+            }), order)
+
+    def test_qc_items_require_complete_rows(self) -> None:
+        order = StockOrder(order_no="TEST-QC-ITEM-VALIDATION", order_type="备货订单")
+        self.db.add(order)
+        self.db.flush()
+
+        with self.assertRaisesRegex(Exception, "日期、数量和备注"):
+            _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+                "qc_expected_items": '[{"date":"2026-07-20","quantity":"10 kg","note":""}]',
+            }), order)
 
     def test_late_actual_delivery_creates_sales_warning(self) -> None:
         order = StockOrder(
@@ -135,6 +191,25 @@ class StockOrderRegressionTests(unittest.TestCase):
         self.db.flush()
         warning = self.db.query(StockOrderWarning).filter_by(order_id=order.id, warning_type="sales_delivery_late").one()
         self.assertEqual(warning.department, "销售部")
+
+    def test_schedule_warning_compares_item_dates_not_confirmation_time(self) -> None:
+        order = StockOrder(
+            order_no="TEST-ITEM-DATE-WARNING", order_type="备货订单",
+            production_expected_items='[{"date":"2026-07-20","quantity":"1 kg","note":"预计"}]',
+            production_actual_items='[{"date":"2026-07-21","quantity":"1 kg","note":"实际"}]',
+            production_completed_at=datetime(2026, 7, 19),
+        )
+        self.db.add(order)
+        self.db.flush()
+
+        sync_order_warnings(self.db, order, now=datetime(2026, 7, 21), existing_types=set())
+        self.db.flush()
+
+        warning = self.db.query(StockOrderWarning).filter_by(
+            order_id=order.id, warning_type="production_schedule_overdue"
+        ).one()
+        self.assertIn("第1项", warning.detail)
+        self.assertIn("实际 2026-07-21", warning.detail)
 
 
 if __name__ == "__main__":

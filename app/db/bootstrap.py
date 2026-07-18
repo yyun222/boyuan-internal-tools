@@ -67,6 +67,12 @@ def _ensure_legacy_columns(engine) -> None:
             "activity_logs": {"created_at": "DATETIME NULL", "updated_at": "DATETIME NULL", "deleted_at": "DATETIME NULL"},
             "user_roles": {"created_at": "DATETIME NULL", "updated_at": "DATETIME NULL", "deleted_at": "DATETIME NULL"},
             "stock_orders": {
+                "delivery_items": "TEXT NOT NULL",
+                "purchase_arrival_items": "TEXT NOT NULL",
+                "production_expected_items": "TEXT NOT NULL",
+                "production_actual_items": "TEXT NOT NULL",
+                "qc_expected_items": "TEXT NOT NULL",
+                "qc_actual_items": "TEXT NOT NULL",
                 "sales_completed_at": "DATETIME NULL",
                 "purchase_responded_at": "DATETIME NULL",
                 "production_responded_at": "DATETIME NULL",
@@ -78,6 +84,32 @@ def _ensure_legacy_columns(engine) -> None:
         for table_name, definitions in columns.items():
             for column_name, definition in definitions.items():
                 _add_column_if_missing(conn, table_name, column_name, definition)
+        stock_columns = _mysql_columns(conn, "stock_orders")
+        legacy_delivery_columns = {"delivery_quantity", "delivery_note"} & stock_columns
+        if legacy_delivery_columns:
+            quantity = "COALESCE(`delivery_quantity`, '')" if "delivery_quantity" in stock_columns else "''"
+            note = "COALESCE(`delivery_note`, '')" if "delivery_note" in stock_columns else "''"
+            conn.execute(text(
+                "UPDATE `stock_orders` SET `delivery_items` = "
+                f"JSON_ARRAY(JSON_OBJECT('quantity', {quantity}, 'note', {note})) "
+                f"WHERE COALESCE(`delivery_items`, '') = '' AND ({quantity} <> '' OR {note} <> '')"
+            ))
+            for column_name in sorted(legacy_delivery_columns):
+                conn.execute(text(f"ALTER TABLE `stock_orders` DROP COLUMN `{column_name}`"))
+        stock_columns = _mysql_columns(conn, "stock_orders")
+        legacy_purchase_columns = {"purchase_material", "purchase_quantity"} & stock_columns
+        if legacy_purchase_columns:
+            material = "COALESCE(`purchase_material`, '')" if "purchase_material" in stock_columns else "''"
+            quantity = "COALESCE(`purchase_quantity`, '')" if "purchase_quantity" in stock_columns else "''"
+            conn.execute(text(
+                "UPDATE `stock_orders` SET `purchase_items` = "
+                f"JSON_ARRAY(JSON_OBJECT('arrival_date', COALESCE(`arrival_date`, ''), 'material', {material}, 'quantity', {quantity})) "
+                f"WHERE COALESCE(`purchase_items`, '') IN ('', '[]') AND ({material} <> '' OR {quantity} <> '')"
+            ))
+            for column_name in sorted(legacy_purchase_columns):
+                conn.execute(text(f"ALTER TABLE `stock_orders` DROP COLUMN `{column_name}`"))
+        if "sales_owner" in _mysql_columns(conn, "stock_orders"):
+            conn.execute(text("ALTER TABLE `stock_orders` DROP COLUMN `sales_owner`"))
 
 
 def init_database(engine, session_factory) -> None:

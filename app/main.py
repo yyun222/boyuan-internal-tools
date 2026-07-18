@@ -8,6 +8,8 @@ import logging
 import secrets
 import csv
 import io
+import re
+from decimal import Decimal, InvalidOperation
 from html import escape
 from pathlib import Path
 from typing import Literal, Optional
@@ -38,7 +40,7 @@ from app.db.models import (
 )
 from app.services.stock_orders import (
     FIELD_META, MODULES, business_date, business_datetime, can_edit_module, clean_fields, field_locks, is_admin,
-    order_payload, sync_order_warnings, user_modules,
+    order_payload, schedule_warning_details, sync_order_warnings, user_modules,
 )
 from app.services.export import build_workbook
 from app.services.reconcile import reconcile
@@ -887,7 +889,13 @@ def _sync_stock_warnings(db: Session, orders: list[StockOrder]) -> dict[int, lis
     order_ids = [order.id for order in orders]
     existing_rows = db.query(StockOrderWarning).filter(StockOrderWarning.order_id.in_(order_ids)).all()
     existing_types: dict[int, set[str]] = {order_id: set() for order_id in order_ids}
+    orders_by_id = {order.id: order for order in orders}
+    schedule_types = {"purchase_schedule_overdue", "production_schedule_overdue", "qc_schedule_overdue"}
     for row in existing_rows:
+        active_schedule_types = {details[0] for details in schedule_warning_details(orders_by_id[row.order_id]).values()}
+        if row.warning_type in schedule_types and row.warning_type not in active_schedule_types:
+            db.delete(row)
+            continue
         existing_types[row.order_id].add(row.warning_type)
     for order in orders:
         sync_order_warnings(db, order, existing_types=existing_types[order.id])
@@ -1001,6 +1009,98 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
     if not fields:
         raise HTTPException(400, "没有可保存的字段")
     is_new = order is None
+    delivery_keys = ("actual_delivery", "delivery_items")
+    if any(key in fields for key in delivery_keys):
+        delivery_values = {
+            key: fields.get(key, "" if is_new else getattr(order, key, ""))
+            for key in delivery_keys
+        }
+        if any(delivery_values.values()) and not all(delivery_values.values()):
+            raise HTTPException(400, "实际交货和交货明细必须同时填写，或者同时不填写")
+        if delivery_values["delivery_items"]:
+            try:
+                delivery_items = json.loads(delivery_values["delivery_items"])
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, "交货明细格式无效") from exc
+            if not isinstance(delivery_items, list) or not delivery_items or any(
+                not isinstance(item, dict)
+                or not str(item.get("quantity") or "").strip()
+                or not str(item.get("note") or "").strip()
+                for item in delivery_items
+            ):
+                raise HTTPException(400, "每条交货明细都必须填写交货数量和备注")
+    if "purchase_arrival_items" in fields and fields["purchase_arrival_items"]:
+        try:
+            arrival_items = json.loads(fields["purchase_arrival_items"])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "实际到货明细格式无效") from exc
+        if not isinstance(arrival_items, list) or any(
+            not isinstance(item, dict)
+            or not str(item.get("date") or "").strip()
+            or not str(item.get("material") or "").strip()
+            or not str(item.get("quantity") or "").strip()
+            or not str(item.get("note") or "").strip()
+            for item in arrival_items
+        ):
+            raise HTTPException(400, "每条实际到货明细都必须填写日期、原料、数量和备注")
+    if "purchase_items" in fields and fields["purchase_items"]:
+        try:
+            purchase_items = json.loads(fields["purchase_items"])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "采购明细格式无效") from exc
+        if not isinstance(purchase_items, list) or any(
+            not isinstance(item, dict)
+            or not str(item.get("arrival_date") or "").strip()
+            or not str(item.get("material") or "").strip()
+            or not str(item.get("quantity") or "").strip()
+            for item in purchase_items
+        ):
+            raise HTTPException(400, "每条采购明细都必须填写预计到货时间、需采购原料和采购数量")
+        fields["arrival_date"] = max((str(item["arrival_date"]).strip() for item in purchase_items), default="")
+    production_item_rules = (
+        ("production_expected_items", "预计完成明细", "date"),
+        ("production_actual_items", "实际完成明细", "date"),
+    )
+    for field_key, label, date_key in production_item_rules:
+        if field_key not in fields or not fields[field_key]:
+            continue
+        try:
+            production_items = json.loads(fields[field_key])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"{label}格式无效") from exc
+        if not isinstance(production_items, list) or any(
+            not isinstance(item, dict)
+            or not str(item.get(date_key) or "").strip()
+            or not str(item.get("quantity") or "").strip()
+            or not str(item.get("note") or "").strip()
+            for item in production_items
+        ):
+            raise HTTPException(400, f"每条{label}都必须填写日期、生产数量和备注")
+        if field_key == "production_expected_items":
+            fields["expected_delivery_date"] = max(
+                (str(item[date_key]).strip() for item in production_items), default=""
+            )
+    qc_item_rules = (
+        ("qc_expected_items", "预计完成明细"),
+        ("qc_actual_items", "实际完成明细"),
+    )
+    for field_key, label in qc_item_rules:
+        if field_key not in fields or not fields[field_key]:
+            continue
+        try:
+            qc_items = json.loads(fields[field_key])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"{label}格式无效") from exc
+        if not isinstance(qc_items, list) or any(
+            not isinstance(item, dict)
+            or not str(item.get("date") or "").strip()
+            or not str(item.get("quantity") or "").strip()
+            or not str(item.get("note") or "").strip()
+            for item in qc_items
+        ):
+            raise HTTPException(400, f"每条{label}都必须填写日期、数量和备注")
+        if field_key == "qc_expected_items":
+            fields["coa_time"] = max((str(item["date"]).strip() for item in qc_items), default="")
     if is_new:
         if not (is_admin(user) or "sales" in user_modules(user)):
             raise HTTPException(403, "只有销售部门可以新建订单")
@@ -1049,9 +1149,6 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         has_meaningful_value = any(value not in (None, "", False, "[]") for value in module_values)
         if module in changed_modules and has_meaningful_value and not getattr(order, timestamp_field):
             setattr(order, timestamp_field, utcnow())
-    if "actual_delivery" in fields and order.actual_delivery and not order.sales_completed_at:
-        order.sales_completed_at = utcnow()
-        _stock_log(db, order, user, "sales", "complete", "完成确认", new_value="已填写实际交货时间")
     if changes:
         order.updated_by_user_id = user.id
         order.updated_at = utcnow()
@@ -1061,6 +1158,60 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
     db.flush()
     db.refresh(order)
     return order
+
+
+def _normalized_stock_quantity(value: str) -> tuple[str, Decimal]:
+    matched = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*(mg|g|kg|ml|L)", str(value or "").strip())
+    if not matched:
+        raise HTTPException(400, f"数量格式无效：{value or '空'}")
+    factors = {
+        "mg": ("mass", Decimal("1")), "g": ("mass", Decimal("1000")),
+        "kg": ("mass", Decimal("1000000")), "ml": ("volume", Decimal("1")),
+        "L": ("volume", Decimal("1000")),
+    }
+    dimension, factor = factors[matched.group(2)]
+    try:
+        return dimension, Decimal(matched.group(1)) * factor
+    except InvalidOperation as exc:
+        raise HTTPException(400, "数量格式无效") from exc
+
+
+def _stock_item_rows(value: str) -> list[dict]:
+    try:
+        rows = json.loads(value or "[]")
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "明细格式无效") from exc
+    if not isinstance(rows, list):
+        raise HTTPException(400, "明细格式无效")
+    return rows
+
+
+def _validate_stock_completion_quantities(order: StockOrder, module: str) -> None:
+    if module == "sales":
+        dimension, ordered = _normalized_stock_quantity(order.quantity)
+        delivered_rows = _stock_item_rows(order.delivery_items)
+        if not delivered_rows:
+            raise HTTPException(400, "请填写实际交货明细")
+        delivered = [_normalized_stock_quantity(row.get("quantity", "")) for row in delivered_rows]
+        if any(item_dimension != dimension for item_dimension, _ in delivered) or sum((value for _, value in delivered), Decimal("0")) != ordered:
+            raise HTTPException(400, "实际交货总数量必须与订单数量相同")
+        return
+    skip_key = MODULES[module][2]
+    if getattr(order, skip_key):
+        return
+    pair_fields = {
+        "purchase": ("purchase_items", "purchase_arrival_items", "实际采购到货数量必须与预计采购逐项相同"),
+        "production": ("production_expected_items", "production_actual_items", "实际完成数量必须与预计完成逐项相同"),
+        "qc": ("qc_expected_items", "qc_actual_items", "质量部实际完成数量必须与预计完成逐项相同"),
+    }
+    expected_key, actual_key, message = pair_fields[module]
+    expected = _stock_item_rows(getattr(order, expected_key))
+    actual = _stock_item_rows(getattr(order, actual_key))
+    if not expected or len(expected) != len(actual) or any(
+        _normalized_stock_quantity(expected_item.get("quantity", "")) != _normalized_stock_quantity(actual[index].get("quantity", ""))
+        for index, expected_item in enumerate(expected)
+    ):
+        raise HTTPException(400, message)
 
 
 @app.post("/api/stock-orders")
@@ -1103,6 +1254,7 @@ async def api_complete_stock_order(order_id: int, payload: StockCompletePayload,
     module_fields = {k: v for k, v in payload.fields.items() if k in FIELD_META and FIELD_META[k][2] == payload.module}
     if module_fields:
         _save_stock_order(db, user, StockOrderPayload(fields=module_fields), order)
+    _validate_stock_completion_quantities(order, payload.module)
     if due_key and not getattr(order, due_key) and not getattr(order, skip_key):
         raise HTTPException(400, "请先填写预计日期或勾选无需处理")
     setattr(order, done_key, utcnow())

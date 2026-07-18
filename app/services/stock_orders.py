@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 
 from app.auth import utcnow
@@ -21,24 +22,28 @@ FIELD_META = {
     "quality_requirement": ("销售部", "质量要求", "sales"),
     "delivery_requirement": ("销售部", "交货期需求", "sales"),
     "sales_note": ("销售部", "销售其他说明", "sales"),
-    "purchase_material": ("采购部", "需采购原料", "purchase"),
-    "purchase_quantity": ("采购部", "采购数量", "purchase"),
     "purchase_not_required": ("采购部", "无需采购", "purchase"),
     "purchase_items": ("采购部", "采购原料明细", "purchase"),
     "purchase_date": ("采购部", "采购日期", "purchase"),
     "arrival_date": ("采购部", "预计到货时间", "purchase"),
     "purchase_note": ("采购部", "采购其他说明", "purchase"),
     "purchase_owner": ("采购部", "采购负责人", "purchase"),
+    "purchase_arrival_items": ("采购部", "实际到货明细", "purchase"),
     "production_not_required": ("生产部", "无需生产", "production"),
     "production_form_date": ("生产部", "填表日期", "production"),
     "production_status": ("生产部", "评估当前状态", "production"),
     "expected_delivery_date": ("生产部", "预计完成时间", "production"),
+    "production_expected_items": ("生产部", "预计完成明细", "production"),
     "production_note": ("生产部", "生产其他说明", "production"),
+    "production_actual_items": ("生产部", "实际完成明细", "production"),
     "qc_not_required": ("质量部", "无需检测", "qc"),
     "coa_time": ("质量部", "预计完成时间", "qc"),
+    "qc_expected_items": ("质量部", "预计完成明细", "qc"),
     "qc_note": ("质量部", "QC备注", "qc"),
     "qc_owner": ("质量部", "QC负责人", "qc"),
+    "qc_actual_items": ("质量部", "实际完成明细", "qc"),
     "actual_delivery": ("实际交货", "实际交货", "sales"),
+    "delivery_items": ("实际交货", "交货数量及备注", "sales"),
 }
 
 BOOLEAN_FIELDS = {"purchase_not_required", "production_not_required", "qc_not_required"}
@@ -108,21 +113,49 @@ def field_locks(db, order: StockOrder) -> dict[str, bool]:
     return {key: bool(getattr(order, key) not in (None, "", False) and updates.get(key, fallback) < today) for key in FIELD_META}
 
 
+SCHEDULE_WARNING_META = {
+    "purchase": ("purchase_schedule_overdue", "采购部", "采购超过预计到货时间", "purchase_items", "purchase_arrival_items", "arrival_date"),
+    "production": ("production_schedule_overdue", "生产部", "生产超过预计完成时间", "production_expected_items", "production_actual_items", "date"),
+    "qc": ("qc_schedule_overdue", "质量部", "QC超过预计完成时间", "qc_expected_items", "qc_actual_items", "date"),
+}
+
+
+def _json_items(value: str) -> list[dict]:
+    try:
+        rows = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return rows if isinstance(rows, list) else []
+
+
+def schedule_warning_details(order: StockOrder, now: datetime | None = None) -> dict[str, tuple[str, str, str, str, str]]:
+    today = business_date(now)
+    result = {}
+    for module, (kind, department, message, expected_field, actual_field, expected_date_key) in SCHEDULE_WARNING_META.items():
+        if getattr(order, MODULES[module][2]):
+            continue
+        expected = _json_items(getattr(order, expected_field))
+        actual = _json_items(getattr(order, actual_field))
+        details = []
+        thresholds = []
+        for index, expected_item in enumerate(expected):
+            due = str(expected_item.get(expected_date_key) or "")
+            actual_date = str(actual[index].get("date") or "") if index < len(actual) else ""
+            if due:
+                thresholds.append(due)
+            if due and actual_date and actual_date > due:
+                details.append(f"第{index + 1}项：预计 {due}，实际 {actual_date}")
+            elif due and not actual_date and today > due:
+                details.append(f"第{index + 1}项：预计 {due}，尚未完成")
+        if details:
+            result[module] = (kind, department, message, min(thresholds), "；".join(details))
+    return result
+
+
 def overdue(order: StockOrder) -> dict[str, str]:
     if order.archive_status == "已取消" or order.order_type == "现货留货":
         return {}
-    today = business_date()
-    result = {}
-    for module, (due_key, done_key, skip_key, label) in MODULES.items():
-        if getattr(order, skip_key):
-            continue
-        due = getattr(order, due_key) or ""
-        done = getattr(order, done_key)
-        if due and not done and due < today:
-            result[module] = f"{label}已逾期"
-        elif due and done and done.date().isoformat() > due:
-            result[module] = f"{label}逾期完成"
-    return result
+    return {module: details[2] for module, details in schedule_warning_details(order).items()}
 
 
 def sync_order_warnings(
@@ -164,18 +197,11 @@ def sync_order_warnings(
         if (order.qc_responded_at and order.qc_responded_at > deadline) or (not order.qc_responded_at and now > deadline):
             add("qc_response_12h", "质量部", "质量部未完成(12h)", deadline)
 
-    date_checks = (
-        ("sales_delivery_late", "销售部", order.actual_delivery, order.delivery_requirement, True, "交货超时"),
-        ("purchase_schedule_overdue", "采购部", business_date(order.purchase_completed_at) if order.purchase_completed_at else "", order.arrival_date, bool(order.purchase_completed_at), "采购超过预计到货时间"),
-        ("production_schedule_overdue", "生产部", business_date(order.production_completed_at) if order.production_completed_at else "", order.expected_delivery_date, bool(order.production_completed_at), "生产超过预计完成时间"),
-        ("qc_schedule_overdue", "质量部", business_date(order.qc_completed_at) if order.qc_completed_at else "", order.coa_time, bool(order.qc_completed_at), "QC超过预计完成时间"),
-    )
-    for kind, department, actual, due, finished, message in date_checks:
-        is_late = bool(actual and due and actual > due)
-        is_pending_overdue = bool(due and not finished and business_date(now) > due and department != "销售部")
-        if is_late or is_pending_overdue:
-            detail = f"要求：{due}；实际：{actual or '尚未完成'}"
-            add(kind, department, message, datetime.fromisoformat(due), detail)
+    if order.actual_delivery and order.delivery_requirement and order.actual_delivery > order.delivery_requirement:
+        add("sales_delivery_late", "销售部", "交货超时", datetime.fromisoformat(order.delivery_requirement),
+            f"要求：{order.delivery_requirement}；实际：{order.actual_delivery}")
+    for kind, department, message, threshold, detail in schedule_warning_details(order, now).values():
+        add(kind, department, message, datetime.fromisoformat(threshold), detail)
 
 
 def order_payload(
