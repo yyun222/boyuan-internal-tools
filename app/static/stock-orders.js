@@ -13,10 +13,10 @@ const STOCK_GROUPS = [
   ["生产部", "production", [["production_form_date","填表日期","date"],["production_not_required","无需生产","checkbox"],["production_expected_items","预计完成","production-expected-items"],["production_status","评估当前状态","textarea"],["production_note","生产说明","textarea"],["production_actual_items","实际完成","production-actual-items"]]],
   ["质量部", "qc", [["qc_not_required","无需检测","checkbox"],["qc_expected_items","预计完成","qc-expected-items"],["qc_note","QC备注","textarea"],["qc_owner","QC负责人"],["qc_actual_items","实际完成","qc-actual-items"]]],
 ];
-const STOCK_QUANTITY_UNITS = ["mg", "g", "kg", "ml", "L"];
+const STOCK_QUANTITY_UNITS = ["mg", "g", "kg", "ml", "L", "瓶", "箱"];
 
 function splitStockQuantity(value) {
-  const matched = String(value || "").trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(mg|g|kg|ml|L)?$/);
+  const matched = String(value || "").trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(mg|g|kg|ml|L|瓶|箱)?$/);
   return matched ? {number:matched[1], unit:matched[2] || "g"} : {number:"", unit:"g"};
 }
 
@@ -430,7 +430,7 @@ function validateStockQcItems(fields) {
 function normalizedStockQuantity(value) {
   const parsed = splitStockQuantity(value);
   if (!parsed.number) return null;
-  const factors = {mg:["mass",1], g:["mass",1000], kg:["mass",1000000], ml:["volume",1], L:["volume",1000]};
+  const factors = {mg:["mass",1], g:["mass",1000], kg:["mass",1000000], ml:["volume",1], L:["volume",1000], 瓶:["bottle",1], 箱:["box",1]};
   const [dimension, factor] = factors[parsed.unit];
   return {dimension, value:Number(parsed.number) * factor};
 }

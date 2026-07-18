@@ -1161,13 +1161,14 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
 
 
 def _normalized_stock_quantity(value: str) -> tuple[str, Decimal]:
-    matched = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*(mg|g|kg|ml|L)", str(value or "").strip())
+    matched = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*(mg|g|kg|ml|L|瓶|箱)", str(value or "").strip())
     if not matched:
         raise HTTPException(400, f"数量格式无效：{value or '空'}")
     factors = {
         "mg": ("mass", Decimal("1")), "g": ("mass", Decimal("1000")),
         "kg": ("mass", Decimal("1000000")), "ml": ("volume", Decimal("1")),
-        "L": ("volume", Decimal("1000")),
+        "L": ("volume", Decimal("1000")), "瓶": ("bottle", Decimal("1")),
+        "箱": ("box", Decimal("1")),
     }
     dimension, factor = factors[matched.group(2)]
     try:
