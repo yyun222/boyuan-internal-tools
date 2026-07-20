@@ -944,7 +944,7 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
 .stock-purchase-items { grid-column:span 3; }
 .stock-purchase-row { display:grid; grid-template-columns:1fr 2fr 1fr auto; gap:8px; margin:7px 0; }
 .stock-delivery-items { grid-column:span 3; }
-.stock-delivery-row { display:grid; grid-template-columns:1fr 2fr auto; gap:8px; margin:7px 0; }
+.stock-delivery-row { display:grid; grid-template-columns:1fr 1fr 2fr auto; gap:8px; margin:7px 0; }
 .stock-arrival-items { grid-column:span 3; }
 .stock-arrival-row { display:grid; grid-template-columns:1fr 2fr 1fr 2fr auto; gap:8px; margin:7px 0; }
 .stock-production-expected-items, .stock-production-actual-items { grid-column:span 3; }

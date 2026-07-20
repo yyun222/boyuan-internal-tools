@@ -889,11 +889,20 @@ def _sync_stock_warnings(db: Session, orders: list[StockOrder]) -> dict[int, lis
     order_ids = [order.id for order in orders]
     existing_rows = db.query(StockOrderWarning).filter(StockOrderWarning.order_id.in_(order_ids)).all()
     existing_types: dict[int, set[str]] = {order_id: set() for order_id in order_ids}
-    orders_by_id = {order.id: order for order in orders}
-    schedule_types = {"purchase_schedule_overdue", "production_schedule_overdue", "qc_schedule_overdue"}
+    refreshable_types = {
+        "sales_delivery_late", "purchase_schedule_overdue",
+        "production_schedule_overdue", "qc_schedule_overdue",
+    }
+    active_types = {
+        order.id: {
+            *{details[0] for details in schedule_warning_details(order).values()},
+            *({"sales_delivery_late"} if order.actual_delivery and order.delivery_requirement
+              and order.actual_delivery > order.delivery_requirement else set()),
+        }
+        for order in orders
+    }
     for row in existing_rows:
-        active_schedule_types = {details[0] for details in schedule_warning_details(orders_by_id[row.order_id]).values()}
-        if row.warning_type in schedule_types and row.warning_type not in active_schedule_types:
+        if row.warning_type in refreshable_types and row.warning_type not in active_types[row.order_id]:
             db.delete(row)
             continue
         existing_types[row.order_id].add(row.warning_type)
@@ -1009,26 +1018,23 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
     if not fields:
         raise HTTPException(400, "没有可保存的字段")
     is_new = order is None
-    delivery_keys = ("actual_delivery", "delivery_items")
-    if any(key in fields for key in delivery_keys):
-        delivery_values = {
-            key: fields.get(key, "" if is_new else getattr(order, key, ""))
-            for key in delivery_keys
-        }
-        if any(delivery_values.values()) and not all(delivery_values.values()):
-            raise HTTPException(400, "实际交货和交货明细必须同时填写，或者同时不填写")
-        if delivery_values["delivery_items"]:
+    if "delivery_items" in fields:
+        if fields["delivery_items"]:
             try:
-                delivery_items = json.loads(delivery_values["delivery_items"])
+                delivery_items = json.loads(fields["delivery_items"])
             except (TypeError, ValueError) as exc:
                 raise HTTPException(400, "交货明细格式无效") from exc
             if not isinstance(delivery_items, list) or not delivery_items or any(
                 not isinstance(item, dict)
+                or not str(item.get("date") or "").strip()
                 or not str(item.get("quantity") or "").strip()
                 or not str(item.get("note") or "").strip()
                 for item in delivery_items
             ):
-                raise HTTPException(400, "每条交货明细都必须填写交货数量和备注")
+                raise HTTPException(400, "每条交货明细都必须填写实际交货日期、交货数量和备注")
+            fields["actual_delivery"] = max(str(item["date"]).strip() for item in delivery_items)
+        else:
+            fields["actual_delivery"] = ""
     if "purchase_arrival_items" in fields and fields["purchase_arrival_items"]:
         try:
             arrival_items = json.loads(fields["purchase_arrival_items"])
