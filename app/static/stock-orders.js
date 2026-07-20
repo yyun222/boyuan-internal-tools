@@ -193,7 +193,7 @@ function renderStockField([key,label,type]) {
     if (type === "arrival-items") { try { shown = JSON.parse(value || "[]").map(x => `${x.date || ""}：${x.material || ""} × ${x.quantity || ""}（${x.note || ""}）`).join("\n") || "—"; } catch (_) {} }
     if (type === "production-expected-items") { try { shown = JSON.parse(value || "[]").map(x => `${x.date || ""}：${x.quantity || ""}（${x.note || ""}）`).join("\n") || "—"; } catch (_) {} }
     if (type === "production-actual-items") { try { shown = JSON.parse(value || "[]").map(x => `${x.date || ""}：${x.quantity || ""}（${x.note || ""}）`).join("\n") || "—"; } catch (_) {} }
-    if (type === "qc-expected-items" || type === "qc-actual-items") { try { shown = JSON.parse(value || "[]").map(x => `${x.date || ""}：${x.quantity || ""}（${x.note || ""}）`).join("\n") || "—"; } catch (_) {} }
+    if (type === "qc-expected-items" || type === "qc-actual-items") { try { shown = JSON.parse(value || "[]").map(x => `${x.date || ""}（${x.note || ""}）`).join("\n") || "—"; } catch (_) {} }
     return `<div class="stock-view-field"><strong>${label}</strong><span>${escapeHtml(shown)}</span></div>`;
   }
   if (type === "items") {
@@ -221,7 +221,7 @@ function renderStockField([key,label,type]) {
   }
   if (type === "qc-expected-items" || type === "qc-actual-items") {
     let items = []; try { items = JSON.parse(value || "[]"); } catch (_) {}
-    if (!items.length) items = [{date:"",quantity:"",note:""}];
+    if (!items.length) items = [{date:"",note:""}];
     const actual = type === "qc-actual-items";
     const kind = actual ? "actual" : "expected";
     const title = actual ? "实际完成日期" : "预计完成日期";
@@ -256,7 +256,7 @@ function addArrivalRow() { $("#stock-arrival-item-rows")?.insertAdjacentHTML("be
 function productionItemRow(item = {}, disabled = false, kind = "expected", dateTitle = "预计完成日期") { return `<div class="stock-production-row"><input data-production-${kind}-date type="date" title="${dateTitle}" value="${escapeHtml(item.date || "")}" ${disabled ? "disabled" : ""}>${quantityControl(item.quantity, `production-${kind}-quantity`, disabled)}<input data-production-${kind}-note placeholder="${kind === "actual" ? "备注（生产批号）" : "备注"}" value="${escapeHtml(item.note || "")}" ${disabled ? "disabled" : ""}>${disabled ? "" : '<button type="button" onclick="this.parentElement.remove()">删除</button>'}</div>`; }
 function addProductionExpectedRow() { $("#stock-production-expected-item-rows")?.insertAdjacentHTML("beforeend", productionItemRow({}, false, "expected", "预计完成日期")); }
 function addProductionActualRow() { $("#stock-production-actual-item-rows")?.insertAdjacentHTML("beforeend", productionItemRow({}, false, "actual", "实际完成日期")); }
-function qcItemRow(item = {}, disabled = false, kind = "expected", dateTitle = "预计完成日期") { return `<div class="stock-qc-row"><input data-qc-${kind}-date type="date" title="${dateTitle}" value="${escapeHtml(item.date || "")}" ${disabled ? "disabled" : ""}>${quantityControl(item.quantity, `qc-${kind}-quantity`, disabled)}<input data-qc-${kind}-note placeholder="备注" value="${escapeHtml(item.note || "")}" ${disabled ? "disabled" : ""}>${disabled ? "" : '<button type="button" onclick="this.parentElement.remove()">删除</button>'}</div>`; }
+function qcItemRow(item = {}, disabled = false, kind = "expected", dateTitle = "预计完成日期") { return `<div class="stock-qc-row"><input data-qc-${kind}-date type="date" title="${dateTitle}" value="${escapeHtml(item.date || "")}" ${disabled ? "disabled" : ""}><input data-qc-${kind}-note placeholder="备注" value="${escapeHtml(item.note || "")}" ${disabled ? "disabled" : ""}>${disabled ? "" : '<button type="button" onclick="this.parentElement.remove()">删除</button>'}</div>`; }
 function addQcExpectedRow() { $("#stock-qc-expected-item-rows")?.insertAdjacentHTML("beforeend", qcItemRow({}, false, "expected", "预计完成日期")); }
 function addQcActualRow() { $("#stock-qc-actual-item-rows")?.insertAdjacentHTML("beforeend", qcItemRow({}, false, "actual", "实际完成日期")); }
 
@@ -332,7 +332,7 @@ function collectStockFields(form, onlyModule = null) {
   }
   for (const kind of ["expected", "actual"]) {
     const container = document.querySelector(`.stock-qc-${kind}-items`);
-    const rows = [...document.querySelectorAll(`.stock-qc-${kind}-items .stock-qc-row`)].filter(row => !row.querySelector("input")?.disabled).map(row => ({date:row.querySelector(`[data-qc-${kind}-date]`).value.trim(), quantity:collectQuantity(row, `qc-${kind}-quantity`), note:row.querySelector(`[data-qc-${kind}-note]`).value.trim()})).filter(x => x.date || x.quantity || x.note);
+    const rows = [...document.querySelectorAll(`.stock-qc-${kind}-items .stock-qc-row`)].filter(row => !row.querySelector("input")?.disabled).map(row => ({date:row.querySelector(`[data-qc-${kind}-date]`).value.trim(), note:row.querySelector(`[data-qc-${kind}-note]`).value.trim()})).filter(x => x.date || x.note);
     const fieldKey = kind === "expected" ? "qc_expected_items" : "qc_actual_items";
     if ((!onlyModule || onlyModule === "qc") && !isHoldOrder && container?.dataset.disabled === "false" && stockMode === "edit" && (rows.length || stockCurrent[fieldKey])) {
       fields[fieldKey] = JSON.stringify(rows);
@@ -363,8 +363,8 @@ function updateItemMissingHighlights(event) {
     [".stock-arrival-row", ["[data-arrival-date]", "[data-arrival-material]", "[data-arrival-quantity-number]", "[data-arrival-note]"]],
     [".stock-production-expected-items .stock-production-row", ["[data-production-expected-date]", "[data-production-expected-quantity-number]", "[data-production-expected-note]"]],
     [".stock-production-actual-items .stock-production-row", ["[data-production-actual-date]", "[data-production-actual-quantity-number]", "[data-production-actual-note]"]],
-    [".stock-qc-expected-items .stock-qc-row", ["[data-qc-expected-date]", "[data-qc-expected-quantity-number]", "[data-qc-expected-note]"]],
-    [".stock-qc-actual-items .stock-qc-row", ["[data-qc-actual-date]", "[data-qc-actual-quantity-number]", "[data-qc-actual-note]"]],
+    [".stock-qc-expected-items .stock-qc-row", ["[data-qc-expected-date]", "[data-qc-expected-note]"]],
+    [".stock-qc-actual-items .stock-qc-row", ["[data-qc-actual-date]", "[data-qc-actual-note]"]],
   ];
   configs.forEach(([rowSelector, inputSelectors, forceRequired]) => {
     const changedInRows = event.target.closest?.(rowSelector);
@@ -418,9 +418,9 @@ function validateStockQcItems(fields) {
     let items = [];
     try { items = JSON.parse(fields[fieldKey] || "[]"); } catch (_) {}
     const kind = fieldKey === "qc_expected_items" ? "expected" : "actual";
-    const incompleteRows = markIncompleteItemRows(`.stock-qc-${kind}-items .stock-qc-row`, [`[data-qc-${kind}-date]`, `[data-qc-${kind}-quantity-number]`, `[data-qc-${kind}-note]`]);
-    if (incompleteRows || items.some(item => !String(item.date || "").trim() || !String(item.quantity || "").trim() || !String(item.note || "").trim())) {
-      alert(`每条${label}明细都必须填写日期、数量和备注`);
+    const incompleteRows = markIncompleteItemRows(`.stock-qc-${kind}-items .stock-qc-row`, [`[data-qc-${kind}-date]`, `[data-qc-${kind}-note]`]);
+    if (incompleteRows || items.some(item => !String(item.date || "").trim() || !String(item.note || "").trim())) {
+      alert(`每条${label}明细都必须填写日期和备注`);
       return false;
     }
   }
@@ -456,14 +456,17 @@ function validateStockCompletionQuantities(module, fields) {
   const pairs = {
     purchase:["purchase_items", "purchase_arrival_items", "实际采购到货数量必须与预计采购逐项相同"],
     production:["production_expected_items", "production_actual_items", "实际完成数量必须与预计完成逐项相同"],
-    qc:["qc_expected_items", "qc_actual_items", "质量部实际完成数量必须与预计完成逐项相同"],
+    qc:["qc_expected_items", "qc_actual_items", "质量部实际完成明细条数必须与预计完成一致"],
   };
   const skipKeys = {purchase:"purchase_not_required", production:"production_not_required", qc:"qc_not_required"};
   if (fields[skipKeys[module]] ?? stockCurrent[skipKeys[module]]) return true;
   const [expectedKey, actualKey, message] = pairs[module];
   const expected = parseStockItems(fields[expectedKey] ?? stockCurrent[expectedKey]);
   const actual = parseStockItems(fields[actualKey] ?? stockCurrent[actualKey]);
-  if (!expected.length || expected.length !== actual.length || expected.some((item, index) => !stockQuantitiesMatch(item.quantity, actual[index]?.quantity))) {
+  const mismatch = module === "qc"
+    ? !expected.length || expected.length !== actual.length
+    : !expected.length || expected.length !== actual.length || expected.some((item, index) => !stockQuantitiesMatch(item.quantity, actual[index]?.quantity));
+  if (mismatch) {
     alert(message);
     return false;
   }

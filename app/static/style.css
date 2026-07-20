@@ -950,7 +950,7 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
 .stock-production-expected-items, .stock-production-actual-items { grid-column:span 3; }
 .stock-production-row { display:grid; grid-template-columns:1fr 1fr 2fr auto; gap:8px; margin:7px 0; }
 .stock-qc-expected-items, .stock-qc-actual-items { grid-column:span 3; }
-.stock-qc-row { display:grid; grid-template-columns:1fr 1fr 2fr auto; gap:8px; margin:7px 0; }
+.stock-qc-row { display:grid; grid-template-columns:1fr 3fr auto; gap:8px; margin:7px 0; }
 .stock-form-grid input.stock-item-missing { border-color:#d92d20; background:#fff1f0; box-shadow:0 0 0 1px rgba(217,45,32,.12); }
 .stock-quantity-control { display:grid; grid-template-columns:minmax(80px,1fr) 72px; gap:6px; }
 .stock-quantity-control input, .stock-quantity-control select { min-width:0; }

@@ -175,10 +175,32 @@ class StockOrderRegressionTests(unittest.TestCase):
         self.db.add(order)
         self.db.flush()
 
-        with self.assertRaisesRegex(Exception, "日期、数量和备注"):
+        with self.assertRaisesRegex(Exception, "日期和备注"):
             _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
-                "qc_expected_items": '[{"date":"2026-07-20","quantity":"10 kg","note":""}]',
+                "qc_expected_items": '[{"date":"2026-07-20","note":""}]',
             }), order)
+
+    def test_qc_items_do_not_require_quantity(self) -> None:
+        order = StockOrder(order_no="TEST-QC-NO-QUANTITY", order_type="备货订单")
+        self.db.add(order)
+        self.db.flush()
+
+        saved = _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+            "qc_expected_items": '[{"date":"2026-07-20","note":"预计检测"}]',
+            "qc_actual_items": '[{"date":"2026-07-21","note":"检测完成"}]',
+        }), order)
+
+        _validate_stock_completion_quantities(saved, "qc")
+
+    def test_qc_completion_only_requires_matching_item_counts(self) -> None:
+        order = StockOrder(
+            order_no="TEST-QC-ITEM-COUNT", order_type="备货订单",
+            qc_expected_items='[{"date":"2026-07-20","note":"一"},{"date":"2026-07-21","note":"二"}]',
+            qc_actual_items='[{"date":"2026-07-22","note":"完成"}]',
+        )
+
+        with self.assertRaisesRegex(Exception, "明细条数"):
+            _validate_stock_completion_quantities(order, "qc")
 
     def test_late_actual_delivery_creates_sales_warning(self) -> None:
         order = StockOrder(

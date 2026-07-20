@@ -1094,11 +1094,10 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         if not isinstance(qc_items, list) or any(
             not isinstance(item, dict)
             or not str(item.get("date") or "").strip()
-            or not str(item.get("quantity") or "").strip()
             or not str(item.get("note") or "").strip()
             for item in qc_items
         ):
-            raise HTTPException(400, f"每条{label}都必须填写日期、数量和备注")
+            raise HTTPException(400, f"每条{label}都必须填写日期和备注")
         if field_key == "qc_expected_items":
             fields["coa_time"] = max((str(item["date"]).strip() for item in qc_items), default="")
     if is_new:
@@ -1203,13 +1202,16 @@ def _validate_stock_completion_quantities(order: StockOrder, module: str) -> Non
     pair_fields = {
         "purchase": ("purchase_items", "purchase_arrival_items", "实际采购到货数量必须与预计采购逐项相同"),
         "production": ("production_expected_items", "production_actual_items", "实际完成数量必须与预计完成逐项相同"),
-        "qc": ("qc_expected_items", "qc_actual_items", "质量部实际完成数量必须与预计完成逐项相同"),
+        "qc": ("qc_expected_items", "qc_actual_items", "质量部实际完成明细条数必须与预计完成一致"),
     }
     expected_key, actual_key, message = pair_fields[module]
     expected = _stock_item_rows(getattr(order, expected_key))
     actual = _stock_item_rows(getattr(order, actual_key))
-    if not expected or len(expected) != len(actual) or any(
-        _normalized_stock_quantity(expected_item.get("quantity", "")) != _normalized_stock_quantity(actual[index].get("quantity", ""))
+    if not expected or len(expected) != len(actual):
+        raise HTTPException(400, message)
+    if module != "qc" and any(
+        _normalized_stock_quantity(expected_item.get("quantity", ""))
+        != _normalized_stock_quantity(actual[index].get("quantity", ""))
         for index, expected_item in enumerate(expected)
     ):
         raise HTTPException(400, message)
