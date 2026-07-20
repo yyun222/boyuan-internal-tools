@@ -125,7 +125,29 @@ def _json_items(value: str) -> list[dict]:
         rows = json.loads(value or "[]")
     except (TypeError, ValueError):
         return []
-    return rows if isinstance(rows, list) else []
+    if not isinstance(rows, list):
+        return []
+    normalized = []
+    reserved = {
+        item.get("id") for item in rows
+        if isinstance(item, dict) and isinstance(item.get("id"), int)
+        and not isinstance(item.get("id"), bool) and item.get("id") > 0
+    }
+    used: set[int] = set()
+    for index, item in enumerate(rows):
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        raw_id = row.get("id")
+        item_id = raw_id if isinstance(raw_id, int) and not isinstance(raw_id, bool) and raw_id > 0 else None
+        if item_id is None or item_id in used:
+            item_id = index + 1
+            while item_id in reserved or item_id in used:
+                item_id += 1
+        used.add(item_id)
+        row["id"] = item_id
+        normalized.append(row)
+    return sorted(normalized, key=lambda item: item["id"])
 
 
 def schedule_warning_details(order: StockOrder, now: datetime | None = None) -> dict[str, tuple[str, str, str, str, str]]:

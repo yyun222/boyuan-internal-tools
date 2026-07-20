@@ -1106,6 +1106,15 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
             raise HTTPException(400, f"每条{label}都必须填写日期和备注")
         if field_key == "qc_expected_items":
             fields["coa_time"] = max((str(item["date"]).strip() for item in qc_items), default="")
+    item_fields = {
+        "delivery_items", "purchase_items", "purchase_arrival_items",
+        "production_expected_items", "production_actual_items",
+        "qc_expected_items", "qc_actual_items",
+    }
+    for field_key in item_fields & fields.keys():
+        if fields[field_key]:
+            rows = _normalize_stock_item_ids(json.loads(fields[field_key]))
+            fields[field_key] = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
     if is_new:
         if not (is_admin(user) or "sales" in user_modules(user)):
             raise HTTPException(403, "只有销售部门可以新建订单")
@@ -1189,7 +1198,29 @@ def _stock_item_rows(value: str) -> list[dict]:
         raise HTTPException(400, "明细格式无效") from exc
     if not isinstance(rows, list):
         raise HTTPException(400, "明细格式无效")
-    return rows
+    return _normalize_stock_item_ids(rows)
+
+
+def _normalize_stock_item_ids(rows: list[dict]) -> list[dict]:
+    normalized = []
+    reserved = {
+        item.get("id") for item in rows
+        if isinstance(item, dict) and isinstance(item.get("id"), int)
+        and not isinstance(item.get("id"), bool) and item.get("id") > 0
+    }
+    used: set[int] = set()
+    for index, item in enumerate(rows):
+        row = dict(item)
+        raw_id = row.get("id")
+        item_id = raw_id if isinstance(raw_id, int) and not isinstance(raw_id, bool) and raw_id > 0 else None
+        if item_id is None or item_id in used:
+            item_id = index + 1
+            while item_id in reserved or item_id in used:
+                item_id += 1
+        used.add(item_id)
+        row["id"] = item_id
+        normalized.append(row)
+    return sorted(normalized, key=lambda item: item["id"])
 
 
 def _validate_stock_completion_quantities(order: StockOrder, module: str) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import unittest
 from datetime import datetime, timedelta
 
@@ -151,6 +152,8 @@ class StockOrderRegressionTests(unittest.TestCase):
         }), order)
 
         self.assertEqual(saved.actual_delivery, "2026-07-22")
+        delivery_items = json.loads(saved.delivery_items)
+        self.assertEqual([item["id"] for item in delivery_items], [1, 2])
         sync_order_warnings(self.db, saved, existing_types=set())
         self.db.flush()
         warning = self.db.query(StockOrderWarning).filter_by(
@@ -187,6 +190,19 @@ class StockOrderRegressionTests(unittest.TestCase):
             _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
                 "production_actual_items": '[{"date":"2026-07-20","quantity":"10 kg","note":""}]',
             }), order)
+
+    def test_item_ids_are_persisted_and_sorted(self) -> None:
+        order = StockOrder(order_no="TEST-ITEM-IDS", order_type="备货订单")
+        self.db.add(order)
+        self.db.flush()
+
+        saved = _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+            "production_expected_items": '[{"id":2,"date":"2026-07-21","quantity":"2 kg","note":"二"},{"id":1,"date":"2026-07-20","quantity":"1 kg","note":"一"}]',
+            "production_actual_items": '[{"date":"2026-07-20","quantity":"1 kg","note":"一"},{"date":"2026-07-21","quantity":"2 kg","note":"二"}]',
+        }), order)
+
+        self.assertEqual([item["id"] for item in json.loads(saved.production_expected_items)], [1, 2])
+        self.assertEqual([item["id"] for item in json.loads(saved.production_actual_items)], [1, 2])
 
     def test_qc_items_require_complete_rows(self) -> None:
         order = StockOrder(order_no="TEST-QC-ITEM-VALIDATION", order_type="备货订单")
