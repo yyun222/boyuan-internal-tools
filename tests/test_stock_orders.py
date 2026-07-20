@@ -154,8 +154,6 @@ class StockOrderRegressionTests(unittest.TestCase):
         self.assertEqual(saved.actual_delivery, "2026-07-22")
         delivery_items = json.loads(saved.delivery_items)
         self.assertEqual([item["id"] for item in delivery_items], [1, 2])
-        sync_order_warnings(self.db, saved, existing_types=set())
-        self.db.flush()
         warning = self.db.query(StockOrderWarning).filter_by(
             order_id=saved.id, warning_type="sales_delivery_late"
         ).one()
