@@ -43,8 +43,27 @@ function canAddStockItemRow(rowSelector, inputSelectors) {
 }
 
 function splitStockQuantity(value) {
-  const matched = String(value || "").trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(mg|g|kg|ml|L|瓶|箱)?$/);
-  return matched ? {number:matched[1], unit:matched[2] || "kg"} : {number:"", unit:"kg"};
+  const normalized = String(value || "").normalize("NFKC").trim();
+  const matched = normalized.match(/^([0-9]+(?:\.[0-9]+)?)\s*(mg|g|kg|ml|l|瓶|箱)?$/i);
+  if (!matched) return {number:"", unit:"kg"};
+  const unit = {mg:"mg", g:"g", kg:"kg", ml:"ml", l:"L"}[(matched[2] || "kg").toLowerCase()] || matched[2];
+  return {number:matched[1], unit};
+}
+
+function fillRecognizedStockField(form, key, value) {
+  if (key === "quantity") {
+    const control = form?.querySelector(".stock-field-quantity .stock-quantity-control");
+    const numberInput = control?.querySelector("[data-order-quantity-number]");
+    const unitSelect = control?.querySelector("[data-order-quantity-unit]");
+    if (!numberInput || numberInput.disabled || !unitSelect) return;
+    const parsed = splitStockQuantity(value);
+    if (!parsed.number) return;
+    numberInput.value = parsed.number;
+    unitSelect.value = parsed.unit;
+    return;
+  }
+  const input = key && form?.elements[key];
+  if (input && !input.disabled) input.value = value;
 }
 
 function quantityControl(value, dataName, disabled = false) {
@@ -322,10 +341,8 @@ function recognizeStockText(module) {
   if (purchaseRows.length) labels.push(`采购明细：${purchaseRows.length} 行`);
   if (!labels.length) { alert("未识别到可填写的字段，请检查字段名称或表格格式。"); return; }
   if (!confirm(`识别到以下内容，确认填入表单？\n\n${labels.join("\n")}`)) return;
-  Object.entries(assignments).forEach(([key,value]) => {
-    const input = key && $("#stock-order-form")?.elements[key];
-    if (input && !input.disabled) input.value = value;
-  });
+  const form = $("#stock-order-form");
+  Object.entries(assignments).forEach(([key,value]) => fillRecognizedStockField(form, key, value));
   if (purchaseRows.length) $("#stock-purchase-item-rows").innerHTML = normalizeStockItemIds(purchaseRows).map(item => purchaseItemRow(item)).join("");
 }
 
