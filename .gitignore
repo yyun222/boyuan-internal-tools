@@ -224,3 +224,5 @@ __marimo__/
 example*.xlsx
 example*.xls
 test_data.json
+
+boyuanpharm-tools_ssl_cert_nginx/*
