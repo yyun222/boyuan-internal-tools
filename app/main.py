@@ -1035,20 +1035,6 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
             fields["actual_delivery"] = max(str(item["date"]).strip() for item in delivery_items)
         else:
             fields["actual_delivery"] = ""
-    if "purchase_arrival_items" in fields and fields["purchase_arrival_items"]:
-        try:
-            arrival_items = json.loads(fields["purchase_arrival_items"])
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(400, "实际到货明细格式无效") from exc
-        if not isinstance(arrival_items, list) or any(
-            not isinstance(item, dict)
-            or not str(item.get("date") or "").strip()
-            or not str(item.get("material") or "").strip()
-            or not str(item.get("quantity") or "").strip()
-            or not str(item.get("note") or "").strip()
-            for item in arrival_items
-        ):
-            raise HTTPException(400, "每条实际到货明细都必须填写日期、原料、数量和备注")
     if "purchase_items" in fields and fields["purchase_items"]:
         try:
             purchase_items = json.loads(fields["purchase_items"])
@@ -1062,6 +1048,15 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
             for item in purchase_items
         ):
             raise HTTPException(400, "每条采购明细都必须填写预计到货时间、需采购原料和采购数量")
+        for item in purchase_items:
+            item["received"] = item.get("received") is True
+        if order is not None:
+            old_items = {item["id"]: item for item in _normalize_stock_item_ids(json.loads(order.purchase_items or "[]"))}
+            new_items = {item["id"]: item for item in _normalize_stock_item_ids(purchase_items)}
+            for item_id, old_item in old_items.items():
+                if old_item.get("received") is True and new_items.get(item_id) != old_item:
+                    raise HTTPException(400, f"已到货的采购明细第 {item_id} 项不能修改或删除")
+        fields["purchase_items"] = json.dumps(purchase_items, ensure_ascii=False, separators=(",", ":"))
         fields["arrival_date"] = max((str(item["arrival_date"]).strip() for item in purchase_items), default="")
     production_item_rules = (
         ("production_expected_items", "预计完成明细", "date"),
@@ -1107,7 +1102,7 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         if field_key == "qc_expected_items":
             fields["coa_time"] = max((str(item["date"]).strip() for item in qc_items), default="")
     item_fields = {
-        "delivery_items", "purchase_items", "purchase_arrival_items",
+        "delivery_items", "purchase_items",
         "production_expected_items", "production_actual_items",
         "qc_expected_items", "qc_actual_items",
     }
@@ -1233,11 +1228,17 @@ def _validate_stock_completion_quantities(order: StockOrder, module: str) -> Non
         if any(item_dimension != dimension for item_dimension, _ in delivered) or sum((value for _, value in delivered), Decimal("0")) != ordered:
             raise HTTPException(400, "实际交货总数量必须与订单数量相同")
         return
+    if module == "purchase":
+        if not order.purchase_received_at:
+            raise HTTPException(400, "请填写实际全部到货时间")
+        purchase_items = _stock_item_rows(order.purchase_items)
+        if not purchase_items or any(item.get("received") is not True for item in purchase_items):
+            raise HTTPException(400, "请确认所有采购原料明细均已勾选已到货")
+        return
     skip_key = MODULES[module][2]
     if getattr(order, skip_key):
         return
     pair_fields = {
-        "purchase": ("purchase_items", "purchase_arrival_items", "实际采购到货数量必须与预计采购逐项相同"),
         "production": ("production_expected_items", "production_actual_items", "实际完成数量必须与预计完成逐项相同"),
         "qc": ("qc_expected_items", "qc_actual_items", "质量部实际完成明细条数必须与预计完成一致"),
     }
@@ -1391,9 +1392,9 @@ async def api_stock_order_export(kind: str, request: Request, order: str = "", o
     _sync_stock_warnings(db, orders)
     order_ids = [item.id for item in orders]
     if kind == "orders":
-        rows = [["订单号","订单类型","创建时间","内部简称","CAS","数量","业务员","客户名称","提需求日期","交货期需求","实际交货","采购明细","采购预计到货","生产预计完成","QC预计完成","销售完成","采购完成","生产完成","QC完成","订单状态","取消原因"]]
+        rows = [["订单号","订单类型","创建时间","内部简称","CAS","数量","业务员","客户名称","提需求日期","交货期需求","实际交货","采购明细","采购预计到货","实际全部到货时间","生产预计完成","QC预计完成","销售完成","采购完成","生产完成","QC完成","订单状态","取消原因"]]
         for item in orders:
-            rows.append([item.order_no,item.order_type,business_datetime(item.created_at),item.internal_name,item.cas,item.quantity,item.salesperson,item.customer_name,item.demand_date,item.delivery_requirement,item.actual_delivery,item.purchase_items,item.arrival_date,item.expected_delivery_date,item.coa_time,business_datetime(item.sales_completed_at),business_datetime(item.purchase_completed_at),business_datetime(item.production_completed_at),business_datetime(item.qc_completed_at),item.archive_status,item.cancelled_reason])
+            rows.append([item.order_no,item.order_type,business_datetime(item.created_at),item.internal_name,item.cas,item.quantity,item.salesperson,item.customer_name,item.demand_date,item.delivery_requirement,item.actual_delivery,item.purchase_items,item.arrival_date,item.purchase_received_at,item.expected_delivery_date,item.coa_time,business_datetime(item.sales_completed_at),business_datetime(item.purchase_completed_at),business_datetime(item.production_completed_at),business_datetime(item.qc_completed_at),item.archive_status,item.cancelled_reason])
         filename = "备货订单.csv"
     elif kind == "performance":
         warnings = db.query(StockOrderWarning).filter(StockOrderWarning.order_id.in_(order_ids or [-1])).order_by(StockOrderWarning.occurred_at).all()

@@ -68,7 +68,7 @@ def _ensure_legacy_columns(engine) -> None:
             "user_roles": {"created_at": "DATETIME NULL", "updated_at": "DATETIME NULL", "deleted_at": "DATETIME NULL"},
             "stock_orders": {
                 "delivery_items": "TEXT NOT NULL",
-                "purchase_arrival_items": "TEXT NOT NULL",
+                "purchase_received_at": "VARCHAR(40) NOT NULL DEFAULT ''",
                 "production_expected_items": "TEXT NOT NULL",
                 "production_actual_items": "TEXT NOT NULL",
                 "qc_expected_items": "TEXT NOT NULL",
@@ -110,6 +110,8 @@ def _ensure_legacy_columns(engine) -> None:
                 conn.execute(text(f"ALTER TABLE `stock_orders` DROP COLUMN `{column_name}`"))
         if "sales_owner" in _mysql_columns(conn, "stock_orders"):
             conn.execute(text("ALTER TABLE `stock_orders` DROP COLUMN `sales_owner`"))
+        if "purchase_arrival_items" in _mysql_columns(conn, "stock_orders"):
+            conn.execute(text("ALTER TABLE `stock_orders` DROP COLUMN `purchase_arrival_items`"))
 
 
 def init_database(engine, session_factory) -> None:

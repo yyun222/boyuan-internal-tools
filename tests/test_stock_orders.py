@@ -159,15 +159,29 @@ class StockOrderRegressionTests(unittest.TestCase):
         ).one()
         self.assertIn("2026-07-22", warning.detail)
 
-    def test_purchase_arrival_items_require_complete_rows(self) -> None:
-        order = StockOrder(order_no="TEST-ARRIVAL-VALIDATION", order_type="备货订单")
+    def test_received_purchase_item_cannot_be_modified_or_deleted(self) -> None:
+        order = StockOrder(
+            order_no="TEST-RECEIVED-LOCK", order_type="备货订单",
+            purchase_items='[{"id":1,"arrival_date":"2026-07-20","material":"原料A","quantity":"10 kg","received":true}]',
+        )
         self.db.add(order)
         self.db.flush()
 
-        with self.assertRaisesRegex(Exception, "日期、原料、数量和备注"):
+        with self.assertRaisesRegex(Exception, "不能修改或删除"):
             _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
-                "purchase_arrival_items": '[{"date":"2026-07-20","material":"原料A","quantity":"10 kg","note":""}]',
+                "purchase_items": '[]',
             }), order)
+
+    def test_purchase_completion_requires_received_date_and_all_items_received(self) -> None:
+        order = StockOrder(order_no="TEST-PURCHASE-COMPLETE", order_type="备货订单")
+        with self.assertRaisesRegex(Exception, "实际全部到货时间"):
+            _validate_stock_completion_quantities(order, "purchase")
+        order.purchase_received_at = "2026-07-21"
+        order.purchase_items = '[{"id":1,"arrival_date":"2026-07-20","material":"原料A","quantity":"1 kg","received":false}]'
+        with self.assertRaisesRegex(Exception, "均已勾选已到货"):
+            _validate_stock_completion_quantities(order, "purchase")
+        order.purchase_items = '[{"id":1,"arrival_date":"2026-07-20","material":"原料A","quantity":"1 kg","received":true}]'
+        _validate_stock_completion_quantities(order, "purchase")
 
     def test_purchase_items_require_expected_arrival_date(self) -> None:
         order = StockOrder(order_no="TEST-PURCHASE-ITEM-VALIDATION", order_type="备货订单")
@@ -264,6 +278,22 @@ class StockOrderRegressionTests(unittest.TestCase):
         ).one()
         self.assertIn("第1项", warning.detail)
         self.assertIn("实际 2026-07-21", warning.detail)
+
+    def test_purchase_warning_compares_received_date_to_latest_expected_item(self) -> None:
+        order = StockOrder(
+            order_no="TEST-PURCHASE-DATE-WARNING", order_type="备货订单",
+            purchase_items='[{"arrival_date":"2026-07-20","material":"A","quantity":"1 kg"},{"arrival_date":"2026-07-22","material":"B","quantity":"1 kg"}]',
+            purchase_received_at="2026-07-23",
+        )
+        self.db.add(order)
+        self.db.flush()
+        sync_order_warnings(self.db, order, now=datetime(2026, 7, 23), existing_types=set())
+        self.db.flush()
+        warning = self.db.query(StockOrderWarning).filter_by(
+            order_id=order.id, warning_type="purchase_schedule_overdue"
+        ).one()
+        self.assertIn("最晚预计：2026-07-22", warning.detail)
+        self.assertIn("实际全部到货：2026-07-23", warning.detail)
 
 
 if __name__ == "__main__":

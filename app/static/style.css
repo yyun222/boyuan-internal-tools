@@ -942,11 +942,11 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
 .stock-view-field strong { flex:0 0 110px; padding:10px; background:#f5f5f7; color:#515154; }
 .stock-view-field span { padding:10px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .stock-purchase-items { grid-column:span 3; }
-.stock-purchase-row { display:grid; grid-template-columns:38px 1fr 2fr 1fr auto; gap:8px; margin:7px 0; }
+.stock-purchase-row { display:grid; grid-template-columns:38px 1fr 2fr 1fr auto auto; gap:8px; margin:7px 0; }
+.stock-received-check { display:flex; align-items:center; gap:5px; white-space:nowrap; }
+.stock-form-grid .stock-received-check input[type="checkbox"] { width:auto; margin:0; }
 .stock-delivery-items { grid-column:span 3; }
 .stock-delivery-row { display:grid; grid-template-columns:38px 1fr 1fr 2fr auto; gap:8px; margin:7px 0; }
-.stock-arrival-items { grid-column:span 3; }
-.stock-arrival-row { display:grid; grid-template-columns:38px 1fr 2fr 1fr 2fr auto; gap:8px; margin:7px 0; }
 .stock-production-expected-items, .stock-production-actual-items { grid-column:span 3; }
 .stock-production-row { display:grid; grid-template-columns:38px 1fr 1fr 2fr auto; gap:8px; margin:7px 0; }
 .stock-qc-expected-items, .stock-qc-actual-items { grid-column:span 3; }
