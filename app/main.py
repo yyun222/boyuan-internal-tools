@@ -1125,11 +1125,14 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
     for key, value in fields.items():
         module = FIELD_META[key][2]
         old = getattr(order, key)
+        received_only_change = key == "purchase_items" and _purchase_items_received_only_change(old, value)
         # Full-form and older cached clients may include unchanged fields from
         # completed or unrelated modules. Only enforce module rules when the
         # submitted value would actually change persisted data.
         if old == value:
             continue
+        if key == "purchase_not_required" and order.purchase_completed_at and old is True and value is False:
+            raise HTTPException(400, "采购部已以无需采购完成，不能取消无需采购")
         if not can_edit_module(user, module):
             raise HTTPException(403, f"当前角色不能修改{FIELD_META[key][0]}字段")
         if order.order_type == "现货留货" and module in {"purchase", "production", "qc"}:
@@ -1137,19 +1140,20 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         done_key = "sales_completed_at" if module == "sales" else next((values[1] for name, values in MODULES.items() if name == module), None)
         if done_key and getattr(order, done_key) and not is_admin(user):
             raise HTTPException(403, f"{FIELD_META[key][0]}已完成确认")
-        if locks.get(key) and not is_admin(user):
+        if locks.get(key) and not is_admin(user) and not received_only_change:
             raise HTTPException(403, f"{FIELD_META[key][1]}已跨日锁定")
-        if locks.get(key) and is_admin(user) and not payload.reason.strip():
+        if locks.get(key) and is_admin(user) and not payload.reason.strip() and not received_only_change:
             raise HTTPException(400, "管理员修改跨日锁定字段必须填写修正原因")
         setattr(order, key, value)
         changed_modules.add(module)
         changes.append(f"{FIELD_META[key][1]}：{old or '空'} → {value or '空'}")
-        update = db.query(StockOrderFieldUpdate).filter_by(order_id=order.id, field_key=key).one_or_none()
-        if update is None:
-            update = StockOrderFieldUpdate(order_id=order.id, field_key=key)
-            db.add(update)
-        update.updated_date = today
-        update.updated_by_user_id = user.id
+        if not received_only_change:
+            update = db.query(StockOrderFieldUpdate).filter_by(order_id=order.id, field_key=key).one_or_none()
+            if update is None:
+                update = StockOrderFieldUpdate(order_id=order.id, field_key=key)
+                db.add(update)
+            update.updated_date = today
+            update.updated_by_user_id = user.id
     responded_fields = {
         "purchase": "purchase_responded_at", "production": "production_responded_at", "qc": "qc_responded_at",
     }
@@ -1218,6 +1222,31 @@ def _normalize_stock_item_ids(rows: list[dict]) -> list[dict]:
     return sorted(normalized, key=lambda item: item["id"])
 
 
+def _purchase_items_received_only_change(old_value: str, new_value: str) -> bool:
+    """Allow receipt ticks without reopening cross-day locked purchase details."""
+    old_rows = _stock_item_rows(old_value)
+    new_rows = _stock_item_rows(new_value)
+    if len(old_rows) != len(new_rows):
+        return False
+    old_by_id = {row["id"]: row for row in old_rows}
+    new_by_id = {row["id"]: row for row in new_rows}
+    if old_by_id.keys() != new_by_id.keys():
+        return False
+    changed = False
+    for item_id, old_row in old_by_id.items():
+        new_row = new_by_id[item_id]
+        old_received = old_row.get("received") is True
+        new_received = new_row.get("received") is True
+        if old_received and not new_received:
+            return False
+        old_detail = {key: value for key, value in old_row.items() if key != "received"}
+        new_detail = {key: value for key, value in new_row.items() if key != "received"}
+        if old_detail != new_detail:
+            return False
+        changed = changed or old_received != new_received
+    return changed
+
+
 def _validate_stock_completion_quantities(order: StockOrder, module: str) -> None:
     if module == "sales":
         dimension, ordered = _normalized_stock_quantity(order.quantity)
@@ -1229,8 +1258,8 @@ def _validate_stock_completion_quantities(order: StockOrder, module: str) -> Non
             raise HTTPException(400, "实际交货总数量必须与订单数量相同")
         return
     if module == "purchase":
-        if not order.purchase_received_at:
-            raise HTTPException(400, "请填写实际全部到货时间")
+        if order.purchase_not_required:
+            return
         purchase_items = _stock_item_rows(order.purchase_items)
         if not purchase_items or any(item.get("received") is not True for item in purchase_items):
             raise HTTPException(400, "请确认所有采购原料明细均已勾选已到货")
@@ -1392,9 +1421,9 @@ async def api_stock_order_export(kind: str, request: Request, order: str = "", o
     _sync_stock_warnings(db, orders)
     order_ids = [item.id for item in orders]
     if kind == "orders":
-        rows = [["订单号","订单类型","创建时间","内部简称","CAS","数量","业务员","客户名称","提需求日期","交货期需求","实际交货","采购明细","采购预计到货","实际全部到货时间","生产预计完成","QC预计完成","销售完成","采购完成","生产完成","QC完成","订单状态","取消原因"]]
+        rows = [["订单号","订单类型","创建时间","内部简称","CAS","数量","业务员","客户名称","提需求日期","交货期需求","实际交货","采购明细","采购预计到货","生产预计完成","QC预计完成","销售完成","采购完成","生产完成","QC完成","订单状态","取消原因"]]
         for item in orders:
-            rows.append([item.order_no,item.order_type,business_datetime(item.created_at),item.internal_name,item.cas,item.quantity,item.salesperson,item.customer_name,item.demand_date,item.delivery_requirement,item.actual_delivery,item.purchase_items,item.arrival_date,item.purchase_received_at,item.expected_delivery_date,item.coa_time,business_datetime(item.sales_completed_at),business_datetime(item.purchase_completed_at),business_datetime(item.production_completed_at),business_datetime(item.qc_completed_at),item.archive_status,item.cancelled_reason])
+            rows.append([item.order_no,item.order_type,business_datetime(item.created_at),item.internal_name,item.cas,item.quantity,item.salesperson,item.customer_name,item.demand_date,item.delivery_requirement,item.actual_delivery,item.purchase_items,item.arrival_date,item.expected_delivery_date,item.coa_time,business_datetime(item.sales_completed_at),business_datetime(item.purchase_completed_at),business_datetime(item.production_completed_at),business_datetime(item.qc_completed_at),item.archive_status,item.cancelled_reason])
         filename = "备货订单.csv"
     elif kind == "performance":
         warnings = db.query(StockOrderWarning).filter(StockOrderWarning.order_id.in_(order_ids or [-1])).order_by(StockOrderWarning.occurred_at).all()

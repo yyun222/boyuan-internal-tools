@@ -9,7 +9,7 @@ let stockSortBy = "";
 let stockSortOrder = "asc";
 const STOCK_GROUPS = [
   ["基础与销售", "sales", [["internal_name","内部简称"],["cas","CAS"],["quantity","数量"],["order_type","订单类型","select"],["salesperson","业务员"],["demand_date","提需求日期","date"],["customer_name","客户名称"],["order_situation","订单情况","textarea"],["quality_requirement","质量要求","textarea"],["delivery_requirement","交货期需求","date"],["sales_note","其他说明","textarea"],["delivery_items","实际交货日期、数量及备注","delivery-items"]]],
-  ["采购部", "purchase", [["purchase_date","采购日期","date"],["purchase_not_required","无需采购","checkbox"],["purchase_items","采购原料预计到货时间及数量","items"],["purchase_note","采购说明","textarea"],["purchase_owner","采购负责人"],["purchase_received_at","实际全部到货时间","date"]]],
+  ["采购部", "purchase", [["purchase_date","采购日期","date"],["purchase_not_required","无需采购","checkbox"],["purchase_items","采购原料预计到货时间及数量","items"],["purchase_note","采购说明","textarea"],["purchase_owner","采购负责人"]]],
   ["生产部", "production", [["production_form_date","填表日期","date"],["production_not_required","无需生产","checkbox"],["production_expected_items","预计完成","production-expected-items"],["production_status","评估当前状态","textarea"],["production_note","生产说明","textarea"],["production_actual_items","实际完成","production-actual-items"]]],
   ["质量部", "qc", [["qc_not_required","无需检测","checkbox"],["qc_expected_items","预计完成","qc-expected-items"],["qc_note","QC备注","textarea"],["qc_owner","QC负责人"],["qc_actual_items","实际完成","qc-actual-items"]]],
 ];
@@ -181,7 +181,7 @@ function stockState(order, module) {
   const status = order.module_statuses?.[module] || "未填写";
   const department = {sales:"销售部",purchase:"采购部",production:"生产部",qc:"质量部"}[module];
   const warning = order.warnings?.find(item => item.department === department);
-  const isLate = module === "purchase" ? Boolean(order.overdue?.purchase) : Boolean(warning || order.overdue?.[module]);
+  const isLate = module === "purchase" ? false : Boolean(warning || order.overdue?.[module]);
   if (isLate) return `<span class="stock-state late">${escapeHtml(status)}</span>`;
   if (status === "已完成") return '<span class="stock-state done">已完成</span>';
   if (status === "进行中") return '<span class="stock-state pending">进行中</span>';
@@ -230,7 +230,8 @@ function renderStockField([key,label,type]) {
   const locked = stockCurrent.locks?.[key];
   const completed = module === "sales" ? stockCurrent.sales_completed_at : stockCurrent[`${module}_completed_at`];
   const holdModule = stockCurrent.order_type === "现货留货" && module !== "sales";
-  const disabled = stockMode === "view" || holdModule || !stockUser.permissions?.updateStockOrders || !stockCurrent.editableModules.includes(module) || (completed && !stockCurrent.isAdmin) || (locked && !stockCurrent.isAdmin) || stockCurrent.archive_status === "已取消";
+  const completedWithoutPurchase = key === "purchase_not_required" && Boolean(completed && value);
+  const disabled = stockMode === "view" || holdModule || completedWithoutPurchase || !stockUser.permissions?.updateStockOrders || !stockCurrent.editableModules.includes(module) || (completed && !stockCurrent.isAdmin) || (locked && !stockCurrent.isAdmin) || stockCurrent.archive_status === "已取消";
   if (stockMode === "view") {
     let shown = value || "—";
     if (type === "checkbox") shown = value ? "是" : "否";
@@ -245,7 +246,8 @@ function renderStockField([key,label,type]) {
     let items = []; try { items = JSON.parse(value || "[]"); } catch (_) {}
     items = normalizeStockItemIds(items);
     if (!items.length) items = [{id:1,arrival_date:"",material:"",quantity:"",received:false}];
-    return `<div class="wide stock-purchase-items" data-disabled="${disabled ? "true" : "false"}"><span>${label}${locked ? ' <em>已锁定</em>' : ''}</span><div id="stock-purchase-item-rows">${items.map(item => purchaseItemRow(item, disabled)).join("")}</div>${disabled ? "" : '<button id="stock-add-purchase-row" type="button">添加一行</button>'}</div>`;
+    const receivedDisabled = stockMode === "view" || holdModule || !stockUser.permissions?.updateStockOrders || !stockCurrent.editableModules.includes(module) || (completed && !stockCurrent.isAdmin) || stockCurrent.archive_status === "已取消";
+    return `<div class="wide stock-purchase-items" data-disabled="${receivedDisabled ? "true" : "false"}"><span>${label}${locked ? ' <em>已锁定（仍可勾选已到货）</em>' : ''}</span><div id="stock-purchase-item-rows">${items.map(item => purchaseItemRow(item, disabled, receivedDisabled)).join("")}</div>${disabled ? "" : '<button id="stock-add-purchase-row" type="button">添加一行</button>'}</div>`;
   }
   if (type === "delivery-items") {
     let items = []; try { items = JSON.parse(value || "[]"); } catch (_) {}
@@ -291,11 +293,11 @@ function renderStockForm() {
   }).join("")}</div>${stockMode === "edit" && stockCurrent.isAdmin ? '<label class="stock-reason"><span>管理员修正原因（修改跨日锁定字段时必填）</span><input name="reason"></label>' : ''}<div class="stock-form-footer"><span></span><div><button type="button" data-stock-close onclick="closeStockOrder()">关闭</button>${stockMode === "edit" && !cancelled && stockUser.permissions?.updateStockOrders ? '<button class="primary" type="submit">保存</button>' : ''}</div></div></form>`;
 }
 
-function purchaseItemRow(item = {}, disabled = false) {
+function purchaseItemRow(item = {}, disabled = false, receivedDisabled = disabled) {
   const received = item.received === true;
   const itemDisabled = disabled || received;
   const deleteButton = itemDisabled ? "" : '<button type="button" onclick="this.parentElement.remove()">删除</button>';
-  return `<div class="stock-purchase-row" data-item-id="${item.id}">${stockItemId(item)}<input data-purchase-arrival-date type="date" title="预计到货时间" value="${escapeHtml(item.arrival_date || "")}" ${itemDisabled ? "disabled" : ""}><input data-purchase-material placeholder="需采购原料" value="${escapeHtml(item.material || "")}" ${itemDisabled ? "disabled" : ""}>${quantityControl(item.quantity, "purchase-quantity", itemDisabled)}${deleteButton}<label class="stock-received-check"><input data-purchase-received type="checkbox" ${received ? "checked" : ""} ${itemDisabled ? "disabled" : ""}>已到货</label></div>`;
+  return `<div class="stock-purchase-row" data-item-id="${item.id}">${stockItemId(item)}<input data-purchase-arrival-date type="date" title="预计到货时间" value="${escapeHtml(item.arrival_date || "")}" ${itemDisabled ? "disabled" : ""}><input data-purchase-material placeholder="需采购原料" value="${escapeHtml(item.material || "")}" ${itemDisabled ? "disabled" : ""}>${quantityControl(item.quantity, "purchase-quantity", itemDisabled)}${deleteButton}<label class="stock-received-check"><input data-purchase-received type="checkbox" ${received ? "checked" : ""} ${received || receivedDisabled ? "disabled" : ""}>已到货</label></div>`;
 }
 function addPurchaseRow() { if (canAddStockItemRow(".stock-purchase-row", ["[data-purchase-arrival-date]", "[data-purchase-material]", "[data-purchase-quantity-number]"])) $("#stock-purchase-item-rows")?.insertAdjacentHTML("beforeend", purchaseItemRow({id:nextStockItemId("#stock-purchase-item-rows")})); }
 function deliveryItemRow(item = {}, disabled = false) { return `<div class="stock-delivery-row" data-item-id="${item.id}">${stockItemId(item)}<input data-delivery-date type="date" title="实际交货日期" value="${escapeHtml(item.date || "")}" ${disabled ? "disabled" : ""}>${quantityControl(item.quantity, "delivery-quantity", disabled)}<input data-delivery-note placeholder="备注" value="${escapeHtml(item.note || "")}" ${disabled ? "disabled" : ""}>${disabled ? "" : '<button type="button" onclick="this.parentElement.remove()">删除</button>'}</div>`; }
@@ -486,10 +488,7 @@ function validateStockCompletionQuantities(module, fields) {
     return true;
   }
   if (module === "purchase") {
-    if (!(fields.purchase_received_at ?? stockCurrent.purchase_received_at)) {
-      alert("请填写实际全部到货时间");
-      return false;
-    }
+    if (fields.purchase_not_required ?? stockCurrent.purchase_not_required) return true;
     const purchaseItems = parseStockItems(fields.purchase_items ?? stockCurrent.purchase_items);
     if (!purchaseItems.length || purchaseItems.some(item => item.received !== true)) {
       alert("请确认所有采购原料明细均已勾选已到货");

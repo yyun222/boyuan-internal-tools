@@ -13,7 +13,7 @@ os.environ.setdefault("BOYUAN_SESSION_SECRET", "unit-test-secret")
 from sqlalchemy import event
 
 from app.auth import utcnow
-from app.db.models import Role, StockOrder, StockOrderWarning, User
+from app.db.models import Role, StockOrder, StockOrderFieldUpdate, StockOrderWarning, User
 from app.main import SessionLocal, StockOrderPayload, _save_stock_order, _stock_month_range, _sync_stock_warnings, _validate_stock_completion_quantities, engine
 from app.services.stock_orders import business_datetime, module_status, sync_order_warnings
 
@@ -172,16 +172,56 @@ class StockOrderRegressionTests(unittest.TestCase):
                 "purchase_items": '[]',
             }), order)
 
-    def test_purchase_completion_requires_received_date_and_all_items_received(self) -> None:
+    def test_received_checkbox_can_be_checked_after_purchase_items_lock(self) -> None:
+        order = StockOrder(
+            order_no="TEST-RECEIVED-AFTER-LOCK", order_type="备货订单",
+            purchase_items='[{"id":1,"arrival_date":"2026-07-20","material":"原料A","quantity":"10 kg","received":false}]',
+        )
+        self.db.add(order)
+        self.db.flush()
+        self.db.add(StockOrderFieldUpdate(
+            order_id=order.id, field_key="purchase_items", updated_date="2000-01-01",
+            updated_by_user_id=self.admin.id,
+        ))
+        self.db.flush()
+
+        saved = _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+            "purchase_items": '[{"id":1,"arrival_date":"2026-07-20","material":"原料A","quantity":"10 kg","received":true}]',
+        }), order)
+        self.assertTrue(json.loads(saved.purchase_items)[0]["received"])
+
+        saved.purchase_items = '[{"id":1,"arrival_date":"2026-07-20","material":"原料A","quantity":"10 kg","received":false}]'
+        with self.assertRaisesRegex(Exception, "修正原因"):
+            _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+                "purchase_items": '[{"id":1,"arrival_date":"2026-07-21","material":"原料A","quantity":"10 kg","received":false}]',
+            }), saved)
+
+    def test_purchase_completion_requires_all_items_received(self) -> None:
         order = StockOrder(order_no="TEST-PURCHASE-COMPLETE", order_type="备货订单")
-        with self.assertRaisesRegex(Exception, "实际全部到货时间"):
-            _validate_stock_completion_quantities(order, "purchase")
-        order.purchase_received_at = "2026-07-21"
         order.purchase_items = '[{"id":1,"arrival_date":"2026-07-20","material":"原料A","quantity":"1 kg","received":false}]'
         with self.assertRaisesRegex(Exception, "均已勾选已到货"):
             _validate_stock_completion_quantities(order, "purchase")
         order.purchase_items = '[{"id":1,"arrival_date":"2026-07-20","material":"原料A","quantity":"1 kg","received":true}]'
         _validate_stock_completion_quantities(order, "purchase")
+
+    def test_purchase_completion_skips_received_requirements_when_not_required(self) -> None:
+        order = StockOrder(
+            order_no="TEST-PURCHASE-NOT-REQUIRED", order_type="备货订单",
+            purchase_not_required=True, purchase_items="",
+        )
+        _validate_stock_completion_quantities(order, "purchase")
+
+    def test_completed_not_required_purchase_cannot_be_unchecked(self) -> None:
+        order = StockOrder(
+            order_no="TEST-PURCHASE-NOT-REQUIRED-LOCK", order_type="备货订单",
+            purchase_not_required=True, purchase_completed_at=utcnow(),
+        )
+        self.db.add(order)
+        self.db.flush()
+        with self.assertRaisesRegex(Exception, "不能取消无需采购"):
+            _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+                "purchase_not_required": False,
+            }), order)
 
     def test_purchase_items_require_expected_arrival_date(self) -> None:
         order = StockOrder(order_no="TEST-PURCHASE-ITEM-VALIDATION", order_type="备货订单")
@@ -279,21 +319,19 @@ class StockOrderRegressionTests(unittest.TestCase):
         self.assertIn("第1项", warning.detail)
         self.assertIn("实际 2026-07-21", warning.detail)
 
-    def test_purchase_warning_compares_received_date_to_latest_expected_item(self) -> None:
+    def test_purchase_items_do_not_create_schedule_warning(self) -> None:
         order = StockOrder(
             order_no="TEST-PURCHASE-DATE-WARNING", order_type="备货订单",
             purchase_items='[{"arrival_date":"2026-07-20","material":"A","quantity":"1 kg"},{"arrival_date":"2026-07-22","material":"B","quantity":"1 kg"}]',
-            purchase_received_at="2026-07-23",
         )
         self.db.add(order)
         self.db.flush()
         sync_order_warnings(self.db, order, now=datetime(2026, 7, 23), existing_types=set())
         self.db.flush()
-        warning = self.db.query(StockOrderWarning).filter_by(
+        warning_count = self.db.query(StockOrderWarning).filter_by(
             order_id=order.id, warning_type="purchase_schedule_overdue"
-        ).one()
-        self.assertIn("最晚预计：2026-07-22", warning.detail)
-        self.assertIn("实际全部到货：2026-07-23", warning.detail)
+        ).count()
+        self.assertEqual(warning_count, 0)
 
 
 if __name__ == "__main__":

@@ -28,7 +28,6 @@ FIELD_META = {
     "arrival_date": ("采购部", "预计到货时间", "purchase"),
     "purchase_note": ("采购部", "采购其他说明", "purchase"),
     "purchase_owner": ("采购部", "采购负责人", "purchase"),
-    "purchase_received_at": ("采购部", "实际全部到货时间", "purchase"),
     "production_not_required": ("生产部", "无需生产", "production"),
     "production_form_date": ("生产部", "填表日期", "production"),
     "production_status": ("生产部", "评估当前状态", "production"),
@@ -48,7 +47,7 @@ FIELD_META = {
 
 BOOLEAN_FIELDS = {"purchase_not_required", "production_not_required", "qc_not_required"}
 MODULES = {
-    "purchase": ("purchase_received_at", "purchase_completed_at", "purchase_not_required", "采购实际全部到货"),
+    "purchase": ("", "purchase_completed_at", "purchase_not_required", "采购填写完成"),
     "production": ("expected_delivery_date", "production_completed_at", "production_not_required", "生产预计完成"),
     "qc": ("coa_time", "qc_completed_at", "qc_not_required", "QC预计完成"),
 }
@@ -152,22 +151,6 @@ def _json_items(value: str) -> list[dict]:
 def schedule_warning_details(order: StockOrder, now: datetime | None = None) -> dict[str, tuple[str, str, str, str, str]]:
     today = business_date(now)
     result = {}
-    purchase_due_dates = [
-        str(item.get("arrival_date") or "")
-        for item in _json_items(order.purchase_items)
-        if str(item.get("arrival_date") or "")
-    ]
-    if (
-        not order.purchase_not_required
-        and purchase_due_dates
-        and order.purchase_received_at
-        and order.purchase_received_at > max(purchase_due_dates)
-    ):
-        latest_due = max(purchase_due_dates)
-        result["purchase"] = (
-            "purchase_schedule_overdue", "采购部", "采购超过预计到货时间",
-            latest_due, f"最晚预计：{latest_due}；实际全部到货：{order.purchase_received_at}",
-        )
     for module, (kind, department, message, expected_field, actual_field, expected_date_key) in SCHEDULE_WARNING_META.items():
         if getattr(order, MODULES[module][2]):
             continue

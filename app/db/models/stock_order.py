@@ -27,7 +27,6 @@ class StockOrder(Base):
     arrival_date = Column(String(40), nullable=False, default="")
     purchase_note = Column(Text, nullable=False, default="")
     purchase_owner = Column(String(120), nullable=False, default="")
-    purchase_received_at = Column(String(40), nullable=False, default="")
     production_not_required = Column(Boolean, nullable=False, default=False)
     production_form_date = Column(String(40), nullable=False, default="")
     production_status = Column(Text, nullable=False, default="")
