@@ -114,6 +114,23 @@ const currentUserRequest = cachedLoginUser
     return r.ok ? r.json() : null;
   });
 
+const logoutBtn = $("#logout-btn");
+logoutBtn?.addEventListener("click", async () => {
+  logoutBtn.disabled = true;
+  const originalText = logoutBtn.textContent;
+  logoutBtn.textContent = "退出中…";
+  try {
+    const response = await fetch("/api/logout", { method: "POST" });
+    if (!response.ok) throw new Error(`退出失败 (HTTP ${response.status})`);
+    sessionStorage.removeItem("boyuan_current_user");
+    window.location.replace("/login");
+  } catch (error) {
+    logoutBtn.disabled = false;
+    logoutBtn.textContent = originalText;
+    window.alert(error.message || "退出失败，请稍后重试");
+  }
+});
+
 
 // --- Mobile sidebar toggle ---
 const menuBtn = $("#menu-btn");
