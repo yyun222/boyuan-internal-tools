@@ -887,6 +887,14 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
 .stock-filters input.stock-date-required { border-color:#e30000; box-shadow:0 0 0 2px rgba(227,0,0,.12); }
 .stock-list-card { padding:0; overflow:hidden; }
 .stock-table { min-width:1180px; }
+.stock-table th:nth-child(5), .stock-table td:nth-child(5) {
+  width:calc(25em + 28px);
+  min-width:calc(25em + 28px);
+  max-width:calc(25em + 28px);
+  white-space:normal;
+  overflow-wrap:anywhere;
+  word-break:break-all;
+}
 .stock-sort { display:inline-flex; align-items:center; gap:4px; padding:0; border:0; border-radius:0; background:transparent; color:inherit; font:inherit; font-weight:inherit; cursor:pointer; }
 .stock-sort:hover:not(:disabled), .stock-sort.active { background:transparent; color:#0071e3; box-shadow:none; transform:none; }
 .stock-sort span { min-width:12px; color:#86868b; }
