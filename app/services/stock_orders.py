@@ -46,6 +46,7 @@ FIELD_META = {
 }
 
 BOOLEAN_FIELDS = {"purchase_not_required", "production_not_required", "qc_not_required"}
+CROSS_DAY_LOCK_EXEMPT_FIELDS = {"production_actual_items", "qc_actual_items"}
 MODULES = {
     "purchase": ("", "purchase_completed_at", "purchase_not_required", "采购填写完成"),
     "production": ("expected_delivery_date", "production_completed_at", "production_not_required", "生产预计完成"),
@@ -109,7 +110,14 @@ def field_locks(db, order: StockOrder) -> dict[str, bool]:
     today = business_date()
     updates = {row.field_key: row.updated_date for row in db.query(StockOrderFieldUpdate).filter_by(order_id=order.id).all()}
     fallback = business_date(order.updated_at or order.created_at)
-    return {key: bool(getattr(order, key) not in (None, "", False) and updates.get(key, fallback) < today) for key in FIELD_META}
+    return {
+        key: bool(
+            key not in CROSS_DAY_LOCK_EXEMPT_FIELDS
+            and getattr(order, key) not in (None, "", False)
+            and updates.get(key, fallback) < today
+        )
+        for key in FIELD_META
+    }
 
 
 SCHEDULE_WARNING_META = {

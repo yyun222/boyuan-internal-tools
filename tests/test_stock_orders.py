@@ -15,7 +15,7 @@ from sqlalchemy import event
 from app.auth import utcnow
 from app.db.models import Role, StockOrder, StockOrderFieldUpdate, StockOrderWarning, User
 from app.main import SessionLocal, StockOrderPayload, _save_stock_order, _stock_month_range, _sync_stock_warnings, _validate_stock_completion_quantities, engine
-from app.services.stock_orders import business_datetime, module_status, sync_order_warnings
+from app.services.stock_orders import business_datetime, field_locks, module_status, sync_order_warnings
 
 
 class StockOrderRegressionTests(unittest.TestCase):
@@ -195,6 +195,63 @@ class StockOrderRegressionTests(unittest.TestCase):
             _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
                 "purchase_items": '[{"id":1,"arrival_date":"2026-07-21","material":"原料A","quantity":"10 kg","received":false}]',
             }), saved)
+
+    def test_production_and_qc_actual_items_are_exempt_from_cross_day_lock(self) -> None:
+        cases = (
+            (
+                "dept05", "production_actual_items",
+                '[{"id":1,"date":"2026-07-20","quantity":"1 kg","note":"第一批"}]',
+                '[{"id":1,"date":"2026-07-20","quantity":"1 kg","note":"第一批"},{"id":2,"date":"2026-07-21","quantity":"2 kg","note":"第二批"}]',
+            ),
+            (
+                "dept06", "qc_actual_items",
+                '[{"id":1,"date":"2026-07-20","note":"第一批"}]',
+                '[{"id":1,"date":"2026-07-20","note":"第一批"},{"id":2,"date":"2026-07-21","note":"第二批"}]',
+            ),
+        )
+        for index, (role_name, field_key, old_value, new_value) in enumerate(cases, start=1):
+            with self.subTest(field_key=field_key):
+                role = self.db.query(Role).filter_by(name=role_name).one()
+                user = User(
+                    email=f"actual-lock-{index}@boyuanpharm.com",
+                    username=f"actual-lock-{index}", display_name="跨日实际完成测试",
+                    is_active=True, roles=[role],
+                )
+                self.db.add(user)
+                self.db.flush()
+                order = StockOrder(
+                    order_no=f"TEST-ACTUAL-LOCK-{index}", order_type="备货订单",
+                    created_by_user_id=user.id,
+                )
+                setattr(order, field_key, old_value)
+                self.db.add(order)
+                self.db.flush()
+                self.db.add(StockOrderFieldUpdate(
+                    order_id=order.id, field_key=field_key, updated_date="2000-01-01",
+                    updated_by_user_id=user.id,
+                ))
+                self.db.flush()
+
+                self.assertFalse(field_locks(self.db, order)[field_key])
+                saved = _save_stock_order(
+                    self.db, user, StockOrderPayload(fields={field_key: new_value}), order,
+                )
+                self.assertEqual(len(json.loads(getattr(saved, field_key))), 2)
+
+    def test_production_expected_items_remain_cross_day_locked(self) -> None:
+        order = StockOrder(
+            order_no="TEST-EXPECTED-STILL-LOCKED", order_type="备货订单",
+            production_expected_items='[{"id":1,"date":"2026-07-20","quantity":"1 kg","note":"预计"}]',
+        )
+        self.db.add(order)
+        self.db.flush()
+        self.db.add(StockOrderFieldUpdate(
+            order_id=order.id, field_key="production_expected_items", updated_date="2000-01-01",
+            updated_by_user_id=self.admin.id,
+        ))
+        self.db.flush()
+
+        self.assertTrue(field_locks(self.db, order)["production_expected_items"])
 
     def test_purchase_completion_requires_all_items_received(self) -> None:
         order = StockOrder(order_no="TEST-PURCHASE-COMPLETE", order_type="备货订单")
