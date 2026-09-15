@@ -888,9 +888,11 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
 .stock-list-card { padding:0; overflow:hidden; }
 .stock-table { min-width:1180px; }
 .stock-table th:nth-child(5), .stock-table td:nth-child(5) {
-  width:calc(25em + 28px);
-  min-width:calc(25em + 28px);
-  max-width:calc(25em + 28px);
+  width:1px;
+}
+.stock-product-content {
+  width:max-content;
+  max-width:25em;
   white-space:normal;
   overflow-wrap:anywhere;
   word-break:break-all;
