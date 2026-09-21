@@ -79,6 +79,16 @@ function collectQuantity(row, dataName) {
 
 function initStockOrders(user) {
   stockUser = user;
+  $("#stock-rows")?.addEventListener("change", (event) => {
+    const select = event.target.closest(".stock-order-action");
+    if (!select) return;
+    const action = select.value;
+    const id = Number(select.dataset.orderId);
+    select.value = "";
+    if (action === "view" || action === "edit") openStockOrder(id, action);
+    else if (action === "history") openOrderStockHistory(select.dataset.orderNo);
+    else if (action === "cancel") cancelStockOrder(id);
+  });
   $("#stock-new-btn")?.addEventListener("click", () => openStockOrder());
   $("#stock-search-btn")?.addEventListener("click", () => {
     if (!validateStockDateRange()) return;
@@ -193,10 +203,10 @@ function stockRow(order) {
   const ownEditableModule = stockUser.departments?.map(d => moduleByDepartment[d]).find(module => module && !(module === "sales" ? order.sales_completed_at : order[`${module}_completed_at`]));
   const canEditDepartment = stockUser.roles?.includes("admin") || Boolean(ownEditableModule);
   const canEdit = order.archive_status !== "已取消" && stockUser.permissions?.updateStockOrders && canEditDepartment;
-  const cancel = stockUser.roles?.includes("admin") && order.archive_status !== "已取消" ? `<button class="danger" onclick="cancelStockOrder(${order.id})">取消订单</button>` : "";
+  const cancel = stockUser.roles?.includes("admin") && order.archive_status !== "已取消" ? '<option value="cancel">取消订单</option>' : "";
   const deliveryLate = order.warnings?.some(item => item.type === "sales_delivery_late");
-  const actions = `<button class="stock-open-btn" onclick="openStockOrder(${order.id},'view')">查看</button>${canEdit ? `<button class="stock-open-btn" onclick="openStockOrder(${order.id},'edit')">修改</button>` : ""}<button class="stock-open-btn" onclick="openOrderStockHistory('${escapeHtml(order.order_no)}')">历史</button>${cancel}`;
-  return `<tr class="${order.archive_status === "已取消" ? "stock-cancelled-row" : ""}"><td><strong>${escapeHtml(order.order_no)}</strong>${order.archive_status === "已取消" ? '<br><span class="stock-state cancelled">已取消</span>' : ""}</td><td>${actions}</td><td>${escapeHtml(order.salesperson || "—")}</td><td>${escapeHtml(order.customer_name || "—")}</td><td><div class="stock-product-content">${escapeHtml(order.internal_name || "—")}<br><span class="muted">${escapeHtml(order.cas || "")}</span></div></td><td>${escapeHtml(order.quantity || "—")}</td><td>${stockState(order,"sales")}</td><td>${stockState(order,"purchase")}</td><td>${stockState(order,"production")}</td><td>${stockState(order,"qc")}</td><td>${escapeHtml(order.delivery_requirement || "—")}</td><td class="${deliveryLate ? "stock-delivery-late" : ""}">${escapeHtml(order.actual_delivery || "—")}${deliveryLate ? "<br>晚于交货期需求" : ""}</td><td>${escapeHtml((order.created_at || "").replace("T"," ").slice(0,16))}</td><td>${escapeHtml((order.updated_at || "").replace("T"," ").slice(0,16))}</td><td>${escapeHtml(order.order_type)}</td></tr>`;
+  const actions = `<select class="stock-order-action" aria-label="订单操作" data-order-id="${order.id}" data-order-no="${escapeHtml(order.order_no)}"><option value="" disabled selected>操作</option><option value="view">查看</option>${canEdit ? '<option value="edit">修改</option>' : ""}<option value="history">历史</option>${cancel}</select>`;
+  return `<tr class="${order.archive_status === "已取消" ? "stock-cancelled-row" : ""}"><td><strong>${escapeHtml(order.order_no)}</strong>${order.archive_status === "已取消" ? '<br><span class="stock-state cancelled">已取消</span>' : ""}</td><td>${actions}</td><td>${escapeHtml(order.salesperson || "—")}</td><td><div class="stock-customer-content">${escapeHtml(order.customer_name || "—")}</div></td><td><div class="stock-product-content">${escapeHtml(order.internal_name || "—")}<br><span class="muted">${escapeHtml(order.cas || "")}</span></div></td><td>${escapeHtml(order.quantity || "—")}</td><td>${stockState(order,"sales")}</td><td>${stockState(order,"purchase")}</td><td>${stockState(order,"production")}</td><td>${stockState(order,"qc")}</td><td>${escapeHtml(order.delivery_requirement || "—")}</td><td class="${deliveryLate ? "stock-delivery-late" : ""}">${escapeHtml(order.actual_delivery || "—")}${deliveryLate ? "<br>晚于交货期需求" : ""}</td><td>${escapeHtml((order.created_at || "").replace("T"," ").slice(0,16))}</td><td>${escapeHtml((order.updated_at || "").replace("T"," ").slice(0,16))}</td><td>${escapeHtml(order.order_type)}</td></tr>`;
 }
 
 async function openStockOrder(id = null, mode = "edit") {
