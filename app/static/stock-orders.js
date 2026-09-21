@@ -529,6 +529,7 @@ function stockOrderSummary(order) {
   return ["新增一个备货需求：", ...[
     ["备货订单号", order.order_no],
     ["内部简称", order.internal_name],
+    ["客户名称", order.customer_name],
     ["数量", order.quantity],
     ["交货期需求", order.delivery_requirement],
   ].map(([label, value]) => `${label}：${value || ""}`), "请登录小程序查看！"].join("\n");
