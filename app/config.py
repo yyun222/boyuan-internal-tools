@@ -18,7 +18,7 @@ def _env_bool(name: str, default: bool) -> bool:
 class Settings:
     database_url: str = os.environ.get(
         "BOYUAN_DATABASE_URL",
-        "mysql+pymysql://root:123123@127.0.0.1:3306/boyuan_internal_tools",
+        "mysql+pymysql://localdbuser:localdbpassword@127.0.0.1:3306/boyuan_internal_tools",
     )
     session_secret: str = os.environ.get("BOYUAN_SESSION_SECRET") or secrets.token_urlsafe(32)
     session_max_age_seconds: int = int(os.environ.get("BOYUAN_SESSION_MAX_AGE", str(8 * 60 * 60)))
