@@ -226,3 +226,5 @@ example*.xls
 test_data.json
 
 boyuanpharm-tools_ssl_cert_nginx/*
+
+/cafeteria_management_system
