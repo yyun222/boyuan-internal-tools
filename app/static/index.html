@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Boyuan Internal Tools</title>
-  <link rel="stylesheet" href="/static/style.css?v=cafeteria-toolbar-2" />
+  <link rel="stylesheet" href="/static/style.css?v=cafeteria-mobile-5" />
 </head>
 <body>
   <header class="topbar">
@@ -257,8 +257,9 @@
         <div class="view-header"><h1>食堂管理</h1></div>
         <section class="card admin-card">
           <div id="cafeteria-toolbar">
-            <label>食堂 <select id="cafeteria-site"></select></label>
+            <label><span>食堂</span> <select id="cafeteria-site" aria-label="食堂"></select></label>
             <nav class="tabs" id="cafeteria-pages" aria-label="食堂业务"></nav>
+            <select id="cafeteria-section-select" aria-label="食堂业务"></select>
             <button type="button" id="cafeteria-refresh">刷新</button>
           </div>
           <div id="cafeteria-status" class="status" role="status"></div>
@@ -357,7 +358,7 @@
   <script src="/static/reconcile.js?v=20260717-static-split-v1"></script>
   <script src="/static/assets.js?v=20260717-static-split-v1"></script>
   <script src="/static/stock-orders.js?v=20261014-stock-summary-cas"></script>
-  <script src="/static/cafeteria.js?v=cafeteria-toolbar-1"></script>
+  <script src="/static/cafeteria.js?v=cafeteria-mobile-3"></script>
   <script src="/static/bootstrap.js?v=cafeteria-password-1"></script>
 </body>
 </html>

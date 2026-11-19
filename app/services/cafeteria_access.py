@@ -15,9 +15,14 @@ CAFETERIA_ROLES.update({
     "cafeteria_finance": (None, "finance", "食堂 · 财务只读"),
     "cafeteria_admin": (None, "admin", "食堂 · 系统管理员"),
 })
+ALL_CAFETERIA_JOBS = frozenset(job for _, job, _ in CAFETERIA_ROLES.values())
 
 
 def cafeteria_jobs(user, site):
+    if site not in SITES:
+        return set()
+    if any(role.deleted_at is None and role.name == "admin" for role in user.roles):
+        return ALL_CAFETERIA_JOBS
     return {
         job
         for role in user.roles
@@ -28,7 +33,7 @@ def cafeteria_jobs(user, site):
 
 
 def has_cafeteria_access(user):
-    return any(role.deleted_at is None and role.name in CAFETERIA_ROLES for role in user.roles)
+    return any(cafeteria_jobs(user, site) for site in SITES)
 
 
 def refresh_locked_roles(db, user):

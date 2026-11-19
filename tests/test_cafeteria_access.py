@@ -57,3 +57,26 @@ class CafeteriaAccessTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as error:
             endpoint("yucheng", self.request(supervisor), self.db)
         self.assertEqual(error.exception.status_code, 403)
+
+    def test_website_admin_has_full_cafeteria_access_without_a_cafeteria_role(self):
+        admin = self.user("cafeteria-website-admin", "admin")
+        request = self.request(admin)
+        self.assertTrue(_user_payload(admin)["permissions"]["viewCafeteria"])
+        access = self.endpoint("/api/cafeteria/access", "GET")(request, self.db)
+        self.assertEqual({site["id"] for site in access["sites"]}, {"jiyang", "yucheng"})
+        for site in access["sites"]:
+            self.assertTrue(site["manageStaff"])
+            self.assertEqual(set(site["jobs"]), {"admin", "manager", "finance", "supervisor", "buyer", "store", "kitchen"})
+            staff = self.endpoint("/api/cafeteria/{site}/staff", "GET")(site["id"], request, self.db)
+            self.assertEqual(len(staff["roles"]), 3)
+            catalog = self.endpoint("/api/cafeteria/{site}/catalog", "GET")(site["id"], request, self.db)
+            self.assertEqual(set(catalog["createKinds"]), {
+                "purchase", "opening", "issue", "transfer", "count", "loss", "return", "correction",
+            })
+
+    def test_cafeteria_system_admin_does_not_inherit_website_admin_access(self):
+        admin = self.user("cafeteria-only-admin", "cafeteria_admin")
+        access = self.endpoint("/api/cafeteria/access", "GET")(self.request(admin), self.db)
+        for site in access["sites"]:
+            self.assertEqual(site["jobs"], ["admin"])
+            self.assertFalse(site["manageStaff"])

@@ -1,6 +1,7 @@
 (() => {
   const site = document.querySelector("#cafeteria-site");
   const pageNav = document.querySelector("#cafeteria-pages");
+  const sectionSelect = document.querySelector("#cafeteria-section-select");
   const content = document.querySelector("#cafeteria-content");
   const status = document.querySelector("#cafeteria-status");
   const dialog = document.querySelector("#cafeteria-dialog");
@@ -15,8 +16,14 @@
   let access = [], revision = 0, currentPage = 1, documentStatus = "";
   const esc = value => escapeHtml(String(value ?? ""));
   const options = entries => entries.map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join("");
-  const table = (headers, rows) => `<div class="table-wrap"><table><thead><tr>${headers.map(x => `<th>${esc(x)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
-  const row = values => `<tr>${values.map(value => `<td>${value}</td>`).join("")}</tr>`;
+  function table(headers, rows) {
+    if (!rows.length) return '<p class="empty">暂无记录</p>';
+    return `<div class="table-wrap cafeteria-table"><table role="table">
+      <thead role="rowgroup"><tr role="row">${headers.map(label => `<th scope="col" role="columnheader">${esc(label)}</th>`).join("")}</tr></thead>
+      <tbody role="rowgroup">${rows.map(values => `<tr role="row">${values.map((value, index) =>
+        `<td role="cell"><span class="cafeteria-cell-label" aria-hidden="true">${esc(headers[index])}</span><div>${value}</div></td>`).join("")}</tr>`).join("")}</tbody>
+    </table></div>`;
+  }
   const button = (label, attributes) => `<button type="button" ${attributes}>${esc(label)}</button>`;
   const selected = () => access.find(entry => entry.id === site.value);
   const has = (...jobs) => jobs.some(job => selected()?.jobs.includes(job));
@@ -47,6 +54,7 @@
     dialogStatus.textContent = "";
     body.innerHTML = html;
     if (!dialog.open) dialog.showModal();
+    dialog.scrollTop = 0;
     const form = body.querySelector("form");
     if (!form || !submit) return;
     form.addEventListener("submit", async event => {
@@ -78,10 +86,10 @@
     const data = await api("staff", { scope });
     if (token !== revision) return;
     content.innerHTML = `<div class="card-header"><h2>人员与权限</h2>${button("邀请新员工", "data-invite")}</div>` +
-      table(["姓名", "邮箱或用户名", "岗位", "状态", "操作"], data.users.map(user => row([
+      table(["姓名", "邮箱或用户名", "岗位", "状态", "操作"], data.users.map(user => [
         esc(user.displayName), esc(user.email || user.username), esc(user.roleDisplayNames.join("、")),
         user.pending ? "待注册" : user.mustSetPassword ? "待设置密码" : "已注册", button("修改岗位", `data-staff="${user.id}"`),
-      ])));
+      ]));
     content.querySelector("[data-invite]").onclick = () => {
       show("邀请新员工", formHtml(
         select("登录方式", "login_type", [["email", "Boyuan 邮箱"], ["username", "用户名（无邮箱）"]]) +
@@ -267,16 +275,16 @@
       · ${esc(states[doc.status])} · ${esc(doc.business_date)} ${esc(doc.purchase_method)}</p><p>${esc(doc.note)}</p>` +
       (doc.parent_id ? button(`采购申请 #${doc.parent_id}`, `data-related="${doc.parent_id}"`) : "") +
       (doc.original_id ? button(`原单 #${doc.original_id}`, `data-related="${doc.original_id}"`) : "") +
-      table(["物资", "规格", "数量", "单价", "实收", "待采购", "到期日"], doc.lines.map(line => row([
+      table(["物资", "规格", "数量", "单价", "实收", "待采购", "到期日"], doc.lines.map(line => [
         esc(line.name), esc(line.spec), esc(line.quantity + " " + line.unit), esc(line.price),
         esc(line.accepted), esc(line.remaining), esc(line.expiry),
-      ]))) +
+      ])) +
       `<div class="admin-actions">${permittedActions(doc, scope).map(action => button(actions[action], `data-action="${action}"`)).join("")}</div>` +
       `<h4>附件</h4><ul>${doc.files.map(file => `<li><a href="/api/cafeteria/${scope}/files/${file.id}">${esc(file.name)}</a></li>`).join("")}</ul>` +
       (canUpload ? button("上传照片或 PDF", "data-upload") : "") +
-      table(["时间", "办理人", "动作", "说明"], doc.events.map(event => row([
+      table(["时间", "办理人", "动作", "说明"], doc.events.map(event => [
         esc(event.created_at), esc(event.actor), esc(actions[event.action] || event.action), esc(event.detail),
-      ]))));
+      ])));
     body.querySelector("[data-related]")?.addEventListener("click", event => {
       detail(scope, event.currentTarget.dataset.related).catch(report);
     });
@@ -305,10 +313,10 @@
     if (token !== revision) return;
     content.innerHTML = `<div class="card-header"><h2>业务单据</h2><div class="admin-actions">${catalog.createKinds.map(kind =>
       button(kinds[kind], `data-new-doc="${kind}"`)).join("")}</div></div>` +
-      table(["单号", "食堂", "类型", "业务日期", "状态"], listing.documents.map(doc => row([
+      table(["单号", "食堂", "类型", "业务日期", "状态"], listing.documents.map(doc => [
         button(String(doc.id), `data-doc="${doc.id}"`), esc(sites[doc.site]), esc(kinds[doc.kind]),
         esc(doc.business_date), esc(states[doc.status]),
-      ]))) +
+      ])) +
       `<div class="admin-actions">${button("上一页", `data-offset="-1" ${currentPage === 1 ? "disabled" : ""}`)}
       <span>第 ${currentPage} 页</span>${button("下一页", `data-offset="1" ${listing.more ? "" : "disabled"}`)}</div>`;
     if (has("store")) {
@@ -319,12 +327,14 @@
       content.querySelector(".card-header .admin-actions").append(control);
     }
     if (has("admin", "manager", "supervisor", "finance")) {
-      const link = document.createElement("a");
-      link.href = `/api/cafeteria/${scope}/export`;
-      link.textContent = "导出 CSV";
-      content.querySelector(".card-header").append(link);
+      const exportButton = document.createElement("button");
+      exportButton.type = "button";
+      exportButton.textContent = "导出 CSV";
+      exportButton.onclick = () => window.location.assign(`/api/cafeteria/${scope}/export`);
+      content.querySelector(".card-header").append(exportButton);
     }
     const filter = document.createElement("label");
+    filter.className = "cafeteria-status-filter";
     filter.innerHTML = select("单据状态", "document-status", [["", "全部状态"], ...Object.entries(states)]).replace(/^<label>|<\/label>$/g, "");
     const selector = filter.querySelector("select");
     selector.value = documentStatus;
@@ -347,21 +357,21 @@
       totals.get(lot.item_id).quantity += Number(lot.quantity);
     }
     content.innerHTML = "<h2>库存汇总</h2>" +
-      table(["物资", "库存", "库存金额"], [...totals.values()].map(item => row([
+      table(["物资", "库存", "库存金额"], [...totals.values()].map(item => [
         esc(item.name), esc(item.quantity.toFixed(4) + " " + item.unit), esc(Number(values[item.item_id]).toFixed(2)),
-      ]))) + "<h2>现存批次</h2>" +
-      table(["批次", "物资", "规格", "供应商", "余量", "到期日"], lots.map(lot => row([
+      ])) + "<h2>现存批次</h2>" +
+      table(["批次", "物资", "规格", "供应商", "余量", "到期日"], lots.map(lot => [
         esc(lot.id), esc(lot.name), esc(lot.spec), esc(lot.supplier), esc(lot.quantity + " " + lot.unit), esc(lot.expiry),
-      ])));
+      ]));
   }
 
   async function catalog(scope, token) {
     const { items, suppliers } = await api("catalog", { scope });
     if (token !== revision) return;
     content.innerHTML = `<div class="card-header"><h2>物资目录</h2>${has("admin", "manager", "supervisor", "buyer", "store", "kitchen") ? button("新增物资", 'data-catalog="items"') : ""}</div>` +
-      table(["名称", "分类", "单位", "规格"], items.map(item => row([item.name, item.category, item.unit, item.spec].map(esc)))) +
+      table(["名称", "分类", "单位", "规格"], items.map(item => [item.name, item.category, item.unit, item.spec].map(esc))) +
       `<div class="card-header"><h2>供应商</h2>${has("admin", "manager", "supervisor", "buyer") ? button("新增供应商", 'data-catalog="suppliers"') : ""}</div>` +
-      table(["名称", "类型", "位置", "联系方式"], suppliers.map(item => row([item.name, item.source_type, item.location, item.contact].map(esc))));
+      table(["名称", "类型", "位置", "联系方式"], suppliers.map(item => [item.name, item.source_type, item.location, item.contact].map(esc)));
     if (has("admin", "manager")) {
       for (const [index, kind, label] of [[0, "items", "导入物资目录"], [1, "suppliers", "导入供应商"]]) {
         const control = document.createElement("button");
@@ -422,24 +432,24 @@
           : [["name", "名称"], ["source_type", "类型"], ["location", "位置"], ["contact", "联系方式"]];
         preview.innerHTML = `<p>共 ${rows.length} 行 · 显示前 20 行</p>` +
           table(columns.map(([, label]) => label), rows.slice(0, 20).map(entry =>
-            row(columns.map(([field]) => esc(entry[field])))));
+            columns.map(([field]) => esc(entry[field]))));
       } catch (error) { report(error); }
     };
   }
 
-  const mealTable = rows => table(["日期", "餐次", "人次", "单价", "金额", "原表金额"], rows.map(entry => row([
+  const mealTable = rows => table(["日期", "餐次", "人次", "单价", "金额", "原表金额"], rows.map(entry => [
     esc(entry.date || "整期汇总"), esc(entry.meal), esc(entry.count), esc(entry.price),
     esc((Number(entry.price) * entry.count).toFixed(2)), esc(entry.source_amount),
-  ])));
+  ]));
 
   async function meals(scope, token) {
     const { records } = await api("meals", { scope });
     if (token !== revision) return;
     content.innerHTML = `<div class="card-header"><h2>用餐月结</h2>${has("admin", "manager", "supervisor") ? button("导入用餐统计", "data-meal-import") : ""}</div>` +
-      table(["月份", "版本", "周期", "金额", "状态"], records.map(entry => row([
+      table(["月份", "版本", "周期", "金额", "状态"], records.map(entry => [
         button(entry.month, `data-meal="${entry.id}"`), esc(entry.version), esc(entry.period_start + " 至 " + entry.period_end),
         esc(entry.total), entry.locked_at ? "已锁定" : "待确认",
-      ])));
+      ]));
     content.querySelectorAll("[data-meal]").forEach(control => control.onclick = async () => {
       try {
         const entry = await api(`meals/${control.dataset.meal}`, { scope });
@@ -514,15 +524,23 @@
     if (!pages.some(([value]) => value === currentSection)) currentSection = "documents";
     pageNav.innerHTML = pages.map(([value, label]) =>
       button(label, `class="tab" data-section="${value}"`)).join("");
+    sectionSelect.innerHTML = options(pages);
     highlightPage();
     currentPage = 1;
   }
 
   function highlightPage() {
+    sectionSelect.value = currentSection;
     pageNav.querySelectorAll("[data-section]").forEach(control => {
       const active = control.dataset.section === currentSection;
       control.classList.toggle("active", active);
       control.setAttribute("aria-pressed", String(active));
+      if (active) {
+        const rail = pageNav.getBoundingClientRect();
+        const tab = control.getBoundingClientRect();
+        if (tab.left < rail.left) pageNav.scrollLeft += tab.left - rail.left;
+        if (tab.right > rail.right) pageNav.scrollLeft += tab.right - rail.right;
+      }
     });
   }
 
@@ -572,13 +590,16 @@
     }
   };
   site.onchange = () => { documentStatus = ""; choosePage(); refresh(); };
-  pageNav.addEventListener("click", event => {
-    const control = event.target.closest("[data-section]");
-    if (!control || control.dataset.section === currentSection) return;
-    currentSection = control.dataset.section;
+  function switchSection(section) {
+    if (!section || section === currentSection) return;
+    currentSection = section;
     highlightPage();
     currentPage = 1;
     refresh();
+  }
+  sectionSelect.onchange = () => switchSection(sectionSelect.value);
+  pageNav.addEventListener("click", event => {
+    switchSection(event.target.closest("[data-section]")?.dataset.section);
   });
   document.querySelector("#cafeteria-refresh").onclick = refresh;
   document.querySelector("[data-caf-close]").onclick = () => dialog.close();
