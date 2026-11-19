@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import secrets
@@ -23,16 +24,20 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import Numeric, and_, case, cast, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import (
+    CAFETERIA_DEFAULT_PASSWORD,
     hash_password,
     is_allowed_email,
     utcnow,
     verify_password,
 )
+from app.cafeteria import register_cafeteria
+from app.cafeteria_operations import register_operations
 from app.config import settings
+from app.session_middleware import CredentialSessionMiddleware
 from app.db import SessionLocal, engine, get_db, init_database
 from app.db.models import (
     ActivityLog, AssetLedgerAsset, AssetLedgerLog, Role, StockOrder,
@@ -42,6 +47,7 @@ from app.services.stock_orders import (
     FIELD_META, MODULES, business_date, business_datetime, can_edit_module, clean_fields, field_locks, is_admin,
     order_payload, schedule_warning_details, sync_order_warnings, user_modules,
 )
+from app.services.cafeteria_access import has_cafeteria_access, refresh_locked_roles
 from app.services.export import build_workbook
 from app.services.reconcile import reconcile
 
@@ -57,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Boyuan Internal Tools")
 app.add_middleware(
-    SessionMiddleware,
+    CredentialSessionMiddleware,
     secret_key=settings.session_secret,
     session_cookie="boyuan_session",
     same_site="lax",
@@ -152,6 +158,23 @@ def _allowed_asset_departments(user: User) -> set[str]:
     return {role.department for role in user.roles if role.deleted_at is None and role.scope == "department" and role.department}
 
 
+def _must_set_password(user: User) -> bool:
+    return user.email is None and user.password_set_at is None
+
+
+def _credential_stamp(user: User) -> str:
+    return hmac.digest(settings.session_secret.encode(), (user.password_hash or "").encode(), "sha256").hex()
+
+
+def _start_session(request: Request, user: User) -> None:
+    request.scope["write_session_cookie"] = True
+    request.session.clear()
+    request.session["user_id"] = user.id
+    request.session["authenticated_at"] = utcnow().isoformat()
+    if user.email is None:
+        request.session["credential_stamp"] = _credential_stamp(user)
+
+
 def _user_payload(user: User) -> dict:
     roles = _role_names(user)
     departments = _role_departments(user)
@@ -171,16 +194,18 @@ def _user_payload(user: User) -> dict:
             "updateReconcile": _has_permission(user, "can_update_reconcile"),
             "viewAssetLedger": _has_permission(user, "can_view_asset_ledger"),
             "updateAssetLedger": _has_permission(user, "can_update_asset_ledger"),
+            "viewCafeteria": has_cafeteria_access(user),
             "viewStockOrders": _has_permission(user, "can_view_stock_orders"),
             "updateStockOrders": _has_permission(user, "can_update_stock_orders"),
             "viewActivityLogs": _has_permission(user, "can_view_activity_logs"),
             "manageUsers": _has_permission(user, "can_manage_users"),
         },
         "lastActivityAt": business_datetime(user.last_activity_at) or None,
+        "mustSetPassword": _must_set_password(user),
     }
 
 
-def _current_user(db: Session, request: Request) -> Optional[User]:
+def _current_user(db: Session, request: Request, *, lock=False) -> Optional[User]:
     user_id = request.session.get("user_id")
     authenticated_at = request.session.get("authenticated_at")
     if not user_id or not authenticated_at:
@@ -193,17 +218,26 @@ def _current_user(db: Session, request: Request) -> Optional[User]:
     if utcnow() - login_time >= timedelta(seconds=settings.session_max_age_seconds):
         request.session.clear()
         return None
-    user = db.get(User, user_id)
+    user = db.get(User, user_id, with_for_update=lock, populate_existing=lock)
     if not user or not user.is_active or user.deleted_at is not None:
+        request.session.clear()
+        return None
+    if user.email is None and (
+        not user.password_hash
+        or not has_cafeteria_access(user)
+        or not hmac.compare_digest(str(request.session.get("credential_stamp", "")), _credential_stamp(user))
+    ):
         request.session.clear()
         return None
     return user
 
 
-def _require_user(request: Request, db: Session) -> User:
+def _require_user(request: Request, db: Session, *, allow_password_setup=False) -> User:
     user = _current_user(db, request)
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
+    if _must_set_password(user) and not allow_password_setup:
+        raise HTTPException(status_code=403, detail="请先在食堂管理中设置个人密码")
     return user
 
 
@@ -505,17 +539,18 @@ def _save_asset_ledger_state_for_user(db: Session, user: User, state: dict) -> d
 
 @app.post("/api/login")
 async def api_login(payload: LoginPayload, request: Request, db: Session = Depends(get_db)):
-    login = payload.username.strip().lower()
+    identifier = payload.username.strip()
+    login = identifier.lower()
     user = db.query(User).filter(
-        or_(User.email == login, User.username == payload.username.strip()),
+        or_(User.email == login, User.username == identifier,
+            and_(User.email.is_(None), User.username == login)),
         User.deleted_at.is_(None),
         User.is_active.is_(True),
     ).one_or_none()
-    if user is None or not verify_password(payload.password, user.password_hash):
+    if (user is None or (user.email is None and not has_cafeteria_access(user))
+            or not verify_password(payload.password, user.password_hash)):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
-    user.last_activity_at = utcnow()
-    request.session["user_id"] = user.id
-    request.session["authenticated_at"] = utcnow().isoformat()
+    _start_session(request, user)
     _log_activity(db, user, "login", "auth", "用户登录")
     return {"ok": True, "user": _user_payload(user)}
 
@@ -525,14 +560,37 @@ async def api_logout(request: Request, db: Session = Depends(get_db)):
     user = _current_user(db, request)
     if user:
         _log_activity(db, user, "logout", "auth", "用户退出登录")
+    request.scope["write_session_cookie"] = True
     request.session.clear()
     return {"ok": True}
 
 
 @app.get("/api/me")
 async def api_me(request: Request, db: Session = Depends(get_db)):
-    user = _require_user(request, db)
+    user = _require_user(request, db, allow_password_setup=True)
     return {"user": _user_payload(user)}
+
+
+class CafeteriaPasswordPayload(BaseModel):
+    password: str = Field(min_length=8, max_length=128)
+
+
+@app.post("/api/cafeteria/password")
+async def api_cafeteria_password(payload: CafeteriaPasswordPayload, request: Request, db: Session = Depends(get_db)):
+    user = _current_user(db, request, lock=True)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+    if not _must_set_password(user):
+        raise HTTPException(status_code=403, detail="当前账号无需设置初始密码")
+    if payload.password.strip() == CAFETERIA_DEFAULT_PASSWORD or len(payload.password.strip()) < 8:
+        raise HTTPException(status_code=400, detail="请设置至少 8 位且不同于默认密码的个人密码")
+    user.password_hash = hash_password(payload.password)
+    user.password_set_at = utcnow()
+    user.updated_at = user.password_set_at
+    _start_session(request, user)
+    _log_activity(db, user, "set_cafeteria_password", "auth", "设置食堂账号个人密码")
+    return {"user": _user_payload(user)}
+
 
 
 def _fetch_fun_facts() -> list[dict]:
@@ -617,13 +675,15 @@ async def api_users(request: Request, db: Session = Depends(get_db)):
     _require_permission(request, db, "can_manage_users")
     users = db.query(User).filter(
         User.deleted_at.is_(None),
-        User.email != settings.initial_admin_email,
+        or_(User.email.is_(None), User.email != settings.initial_admin_email),
     ).order_by(User.created_at.desc()).all()
     return {
         "users": [
             {
                 "id": user.id,
                 "email": user.email,
+                "username": user.username,
+                "mustSetPassword": _must_set_password(user),
                 "displayName": user.display_name,
                 "roles": _role_names(user),
                 "roleDisplayNames": _role_display_names(user),
@@ -645,12 +705,19 @@ async def api_reset_user_password(user_id: int, request: Request, db: Session = 
     user = db.query(User).filter(
         User.id == user_id,
         User.deleted_at.is_(None),
-        User.email != settings.initial_admin_email,
-    ).one_or_none()
+        or_(User.email.is_(None), User.email != settings.initial_admin_email),
+    ).with_for_update().populate_existing().one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
     if user.id == admin.id:
         raise HTTPException(status_code=400, detail="不能重置当前登录账号的密码")
+
+    if user.email is None:
+        user.password_hash = hash_password(CAFETERIA_DEFAULT_PASSWORD)
+        user.password_set_at = None
+        user.updated_at = utcnow()
+        _log_activity(db, admin, "reset_password", "users", f"重置 {user.username} 的密码")
+        return {"ok": True, "username": user.username, "mustSetPassword": True}
 
     user.password_hash = None
     user.password_set_at = None
@@ -675,7 +742,7 @@ async def api_update_user_status(
     user = db.query(User).filter(
         User.id == user_id,
         User.deleted_at.is_(None),
-        User.email != settings.initial_admin_email,
+        or_(User.email.is_(None), User.email != settings.initial_admin_email),
     ).one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
@@ -688,7 +755,7 @@ async def api_update_user_status(
     user.updated_at = utcnow()
     db.commit()
     action = "启用" if payload.is_active else "停用"
-    _log_activity(db, admin, "update_user_status", "users", f"{action}用户 {user.email}")
+    _log_activity(db, admin, "update_user_status", "users", f"{action}用户 {user.email or user.username}")
     return {"ok": True, "isActive": user.is_active}
 
 
@@ -703,8 +770,8 @@ async def api_update_user_roles(
     user = db.query(User).filter(
         User.id == user_id,
         User.deleted_at.is_(None),
-        User.email != settings.initial_admin_email,
-    ).one_or_none()
+        or_(User.email.is_(None), User.email != settings.initial_admin_email),
+    ).with_for_update().populate_existing().one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
     role_names = list(dict.fromkeys(payload.roles))
@@ -715,6 +782,7 @@ async def api_update_user_roles(
         raise HTTPException(status_code=400, detail="包含无效角色")
     if user.id == admin.id and not any(role.can_manage_users for role in roles):
         raise HTTPException(status_code=400, detail="不能移除当前登录账号的用户管理权限")
+    refresh_locked_roles(db, user)
     old_role_names = sorted(_role_names(user))
     old_names = sorted(_role_display_names(user))
     new_role_names = sorted(role.name for role in roles)
@@ -725,7 +793,7 @@ async def api_update_user_roles(
     user.updated_at = utcnow()
     _log_activity(
         db, admin, "update_user_roles", "users",
-        f"更新 {user.email} 权限：{'、'.join(old_names) or '无'} → {'、'.join(new_names)}",
+        f"更新 {user.email or user.username} 权限：{'、'.join(old_names) or '无'} → {'、'.join(new_names)}",
     )
     return {"ok": True, "roles": new_role_names, "roleDisplayNames": new_names}
 
@@ -733,6 +801,10 @@ async def api_update_user_roles(
 @app.post("/api/invitations")
 async def api_invite(payload: InvitePayload, request: Request, db: Session = Depends(get_db)):
     admin = _require_permission(request, db, "can_manage_users")
+    return _invite_user(payload, request, db, admin)
+
+
+def _invite_user(payload, request, db, admin, *, new_only=False):
     email = payload.email.strip().lower()
     if not is_allowed_email(email):
         raise HTTPException(status_code=400, detail="只允许 boyuanpharm.com 邮箱")
@@ -742,6 +814,8 @@ async def api_invite(payload: InvitePayload, request: Request, db: Session = Dep
     if len(roles) != len(set(payload.roles)):
         raise HTTPException(status_code=400, detail="包含无效角色")
     user = db.query(User).filter(User.email == email).one_or_none()
+    if user is not None and new_only:
+        raise HTTPException(status_code=409, detail="该邮箱无法在食堂内邀请，请联系网站管理员")
     if user and user.deleted_at is not None:
         raise HTTPException(status_code=400, detail="该邮箱对应用户已删除")
     if user and user.password_hash:
@@ -762,7 +836,13 @@ async def api_invite(payload: InvitePayload, request: Request, db: Session = Dep
     user.invited_at = utcnow()
     user.invited_by_user_id = admin.id
     user.updated_at = utcnow()
-    db.commit()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        if new_only:
+            raise HTTPException(status_code=409, detail="该邮箱无法在食堂内邀请，请联系网站管理员") from None
+        raise
     signup_url = str(request.url_for("page_signup")) + f"?email={quote(email)}"
     _log_activity(db, admin, "invite_user", "users", f"邀请 {email}，角色：{', '.join(payload.roles)}")
     return {"ok": True, "email": email, "signupUrl": signup_url}
@@ -780,16 +860,15 @@ async def api_signup(payload: SignupPayload, request: Request, db: Session = Dep
         User.deleted_at.is_(None),
         User.is_active.is_(False),
         User.password_hash.is_(None),
-    ).one_or_none()
-    if not user:
+    ).with_for_update().one_or_none()
+    if not user or not _role_names(user):
         raise HTTPException(status_code=400, detail="该邮箱没有有效邀请，或账号已完成注册")
     user.password_hash = hash_password(payload.password)
     user.display_name = payload.display_name or user.display_name or email.split("@", 1)[0]
     user.is_active = True
     user.password_set_at = utcnow()
     user.last_activity_at = utcnow()
-    request.session["user_id"] = user.id
-    request.session["authenticated_at"] = utcnow().isoformat()
+    _start_session(request, user)
     _log_activity(db, user, "signup", "auth", "用户完成注册并设置密码")
     return {"ok": True, "user": _user_payload(user)}
 
@@ -803,7 +882,7 @@ async def api_activity_logs(request: Request, db: Session = Depends(get_db)):
             {
                 "id": log.id,
                 "userId": log.user_id,
-                "userEmail": log.user.email if log.user else "",
+                "userEmail": (log.user.email or log.user.username) if log.user else "",
                 "activityTime": business_datetime(log.activity_time),
                 "action": log.action,
                 "target": log.target,
@@ -1474,6 +1553,7 @@ _NO_STORE = {"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "
 @app.get("/login")
 async def page_login(request: Request, db: Session = Depends(get_db)):
     if request.query_params.get("force") == "1":
+        request.scope["write_session_cookie"] = True
         request.session.clear()
         return FileResponse(STATIC_DIR / "login.html", headers=_NO_STORE)
     if _current_user(db, request):
@@ -1499,6 +1579,7 @@ async def page_index(request: Request, db: Session = Depends(get_db)):
         or _has_permission(user, "can_manage_users")
         or _has_permission(user, "can_view_activity_logs")
         or _has_permission(user, "can_view_stock_orders")
+        or has_cafeteria_access(user)
     ):
         raise HTTPException(status_code=403, detail="当前账号没有权限")
     return FileResponse(STATIC_DIR / "index.html", headers=_NO_STORE)
@@ -1511,4 +1592,6 @@ async def page_asset_ledger(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/", status_code=302, headers=_NO_STORE)
 
 
+register_cafeteria(app, _require_user, _invite_user, _log_activity)
+register_operations(app, _require_user)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

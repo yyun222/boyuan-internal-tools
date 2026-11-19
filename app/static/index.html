@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Boyuan Internal Tools</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260916-stock-customer-15em" />
+  <link rel="stylesheet" href="/static/style.css?v=cafeteria-toolbar-2" />
 </head>
 <body>
   <header class="topbar">
@@ -45,6 +45,11 @@
           <li class="nav-item" id="asset-ledger-nav" data-view="asset-ledger">
             <span class="nav-icon">🏷️</span>
             <span class="nav-label">固定资产台账</span>
+          </li>
+
+          <li class="nav-item hidden" id="cafeteria-nav" data-view="cafeteria">
+            <span class="nav-icon">🍽</span>
+            <span class="nav-label">食堂管理</span>
           </li>
 
           <li class="nav-item hidden" data-view="admin" id="admin-nav">
@@ -248,6 +253,24 @@
         </section>
       </section>
 
+      <section id="view-cafeteria" class="view">
+        <div class="view-header"><h1>食堂管理</h1></div>
+        <section class="card admin-card">
+          <div id="cafeteria-toolbar">
+            <label>食堂 <select id="cafeteria-site"></select></label>
+            <nav class="tabs" id="cafeteria-pages" aria-label="食堂业务"></nav>
+            <button type="button" id="cafeteria-refresh">刷新</button>
+          </div>
+          <div id="cafeteria-status" class="status" role="status"></div>
+          <div id="cafeteria-content"></div>
+        </section>
+        <dialog id="cafeteria-dialog" class="stock-modal">
+          <div class="stock-modal-head"><h3 id="cafeteria-dialog-title"></h3><button type="button" data-caf-close aria-label="关闭">×</button></div>
+          <div id="cafeteria-dialog-body" class="admin-card"></div>
+          <div id="cafeteria-dialog-status" class="status" role="status"></div>
+        </dialog>
+      </section>
+
       <section id="view-admin" class="view">
         <div class="view-header">
           <h1>用户管理</h1>
@@ -329,11 +352,12 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260805-logout-fix-v1"></script>
-  <script src="/static/admin.js?v=20260717-static-split-v1"></script>
+  <script src="/static/app.js?v=cafeteria-password-1"></script>
+  <script src="/static/admin.js?v=cafeteria-password-1"></script>
   <script src="/static/reconcile.js?v=20260717-static-split-v1"></script>
   <script src="/static/assets.js?v=20260717-static-split-v1"></script>
   <script src="/static/stock-orders.js?v=20261014-stock-summary-cas"></script>
-  <script src="/static/bootstrap.js?v=20260717-static-split-v1"></script>
+  <script src="/static/cafeteria.js?v=cafeteria-toolbar-1"></script>
+  <script src="/static/bootstrap.js?v=cafeteria-password-1"></script>
 </body>
 </html>

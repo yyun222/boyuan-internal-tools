@@ -4,7 +4,12 @@ currentUserRequest.then((data) => {
   currentUser = data.user;
   sessionStorage.setItem("boyuan_current_user", JSON.stringify(data.user));
   $("#current-user").textContent = data.user.email || data.user.username || "";
+  if (data.user.mustSetPassword) {
+    window.showCafeteriaPasswordSetup();
+    return;
+  }
   applyPermissions(data.user);
+  window.refreshCafeteriaNav();
   loadHomeFunFacts();
   loadNextHoliday();
   if (data.user.permissions?.manageUsers) {

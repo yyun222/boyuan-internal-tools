@@ -21,7 +21,7 @@ user_roles = Table(
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
-    email = Column(String(255), nullable=False, unique=True, index=True)
+    email = Column(String(255), unique=True, index=True)
     username = Column(String(255), unique=True, index=True)
     display_name = Column(String(120), nullable=False)
     password_hash = Column(String(255))

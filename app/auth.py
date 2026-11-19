@@ -11,6 +11,7 @@ from typing import Optional
 
 PASSWORD_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_ITERATIONS = 390_000
+CAFETERIA_DEFAULT_PASSWORD = "boyuan1234"
 
 
 def utcnow() -> datetime:

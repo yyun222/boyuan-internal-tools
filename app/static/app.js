@@ -103,7 +103,7 @@ const cachedLoginUser = (() => {
   catch (_) { return null; }
 })();
 
-const currentUserRequest = cachedLoginUser
+const currentUserRequest = cachedLoginUser?.email
   ? Promise.resolve({user: cachedLoginUser})
   : fetch("/api/me", { cache: "no-store" })
   .then((r) => {
@@ -171,6 +171,7 @@ function applyPermissions(user) {
   if (!permissions.viewAssetLedger) {
     assetLedgerNav?.classList.add("hidden");
   }
+  $("#cafeteria-nav")?.classList.toggle("hidden", !permissions.viewCafeteria);
   if (!permissions.viewStockOrders) stockOrdersNav?.classList.add("hidden");
   if (!permissions.updateReconcile) {
     submitBtn.disabled = true;
@@ -297,5 +298,6 @@ document.querySelectorAll(".nav-item[data-view]").forEach((item) => {
     if (item.dataset.view === "activity-logs") loadActivityLogs();
     if (item.dataset.view === "asset-ledger") renderAssetLedgerAll();
     if (item.dataset.view === "stock-orders") loadStockOrders();
+    if (item.dataset.view === "cafeteria") window.loadCafeteria();
   });
 });

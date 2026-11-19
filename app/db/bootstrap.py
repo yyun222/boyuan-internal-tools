@@ -5,6 +5,8 @@ from sqlalchemy import text
 from app.auth import hash_password, utcnow
 from app.config import settings
 from app.db.models import Base, Role, User
+from app.db.models.cafeteria import CafeteriaSite
+from app.services.cafeteria_access import CAFETERIA_ROLES, SITES
 
 DEPARTMENT_ROLES = [
     ("dept01", "工程部", "工程部"), ("dept02", "行政后勤", "行政后勤"),
@@ -50,6 +52,9 @@ def _ensure_legacy_columns(engine) -> None:
     if engine.dialect.name != "mysql":
         return
     with engine.begin() as conn:
+        email_column = conn.execute(text("SHOW COLUMNS FROM users LIKE 'email'")).mappings().one()
+        if email_column["Null"] == "NO":
+            conn.execute(text("ALTER TABLE users MODIFY COLUMN email VARCHAR(255) NULL"))
         if "id" not in _mysql_columns(conn, "user_roles"):
             if _mysql_primary_key_columns(conn, "user_roles"):
                 indexes = _mysql_index_names(conn, "user_roles")
@@ -125,8 +130,14 @@ def init_database(engine, session_factory) -> None:
         for role_name, display_name, department in DEPARTMENT_ROLES:
             _upsert_role(db, role_name, display_name, scope="department", department=department, can_view_asset_ledger=True, can_update_asset_ledger=True)
         for role in db.query(Role).filter(Role.deleted_at.is_(None)).all():
-            role.can_view_stock_orders = True
-            role.can_update_stock_orders = True
+            role.can_view_stock_orders = role.name not in CAFETERIA_ROLES
+            role.can_update_stock_orders = role.name not in CAFETERIA_ROLES
+        for name, (site, _, title) in CAFETERIA_ROLES.items():
+            _upsert_role(db, name, title, scope="cafeteria_site" if site else "cafeteria_all",
+                         can_view_stock_orders=False, can_update_stock_orders=False)
+        for code, label in SITES.items():
+            if db.get(CafeteriaSite, code) is None:
+                db.add(CafeteriaSite(code=code, name=label))
         root = db.query(User).filter(User.email == settings.initial_admin_email).one_or_none()
         if root is None:
             root = User(email=settings.initial_admin_email, username="root", display_name="Root Admin", password_hash=hash_password(settings.initial_admin_password), is_active=True, password_set_at=utcnow(), last_activity_at=utcnow(), roles=[admin])

@@ -71,13 +71,13 @@ async function loadUsers() {
       <thead><tr><th>用户</th><th>角色</th><th>状态</th><th>邀请时间</th><th>密码设置时间</th><th>最近活动</th><th>操作</th></tr></thead>
       <tbody>${data.users.map((user) => `
         <tr>
-          <td>${escapeHtml(user.displayName || "")}<br><span class="muted">${escapeHtml(user.email)}</span></td>
+          <td>${escapeHtml(user.displayName || "")}<br><span class="muted">${escapeHtml(user.email || user.username || "")}</span></td>
           <td>${escapeHtml((user.roleDisplayNames || user.roles || []).join("、") || "—")}</td>
-          <td><span class="user-state ${!user.hasPassword ? "pending" : (user.isActive ? "active" : "inactive")}">${!user.hasPassword ? "已邀请" : (user.isActive ? "正常" : "已停用")}</span></td>
+          <td><span class="user-state ${!user.hasPassword ? "pending" : (user.isActive ? "active" : "inactive")}">${!user.hasPassword ? "已邀请" : (user.isActive ? (user.mustSetPassword ? "待设置密码" : "正常") : "已停用")}</span></td>
           <td>${formatDateTime(user.invitedAt)}</td>
           <td>${formatDateTime(user.passwordSetAt)}</td>
           <td>${formatDateTime(user.lastActivityAt)}</td>
-          <td><div class="user-row-actions"><button type="button" class="user-permission-btn" data-user-id="${user.id}">更新权限</button><button type="button" class="user-status-btn ${user.isActive ? "deactivate" : "activate"}" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}" data-user-active="${user.isActive}" ${!user.hasPassword ? "disabled" : ""}>${user.isActive ? "停用" : "启用"}</button><button type="button" class="user-reset-btn" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email)}" ${!user.hasPassword ? "disabled" : ""}>重置密码</button></div></td>
+          <td><div class="user-row-actions"><button type="button" class="user-permission-btn" data-user-id="${user.id}">更新权限</button><button type="button" class="user-status-btn ${user.isActive ? "deactivate" : "activate"}" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email || user.username || "")}" data-user-active="${user.isActive}" ${!user.hasPassword ? "disabled" : ""}>${user.isActive ? "停用" : "启用"}</button><button type="button" class="user-reset-btn" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email || user.username || "")}" ${!user.hasPassword ? "disabled" : ""}>重置密码</button></div></td>
         </tr>
       `).join("")}</tbody>
     `;
@@ -135,9 +135,11 @@ $("#user-table")?.addEventListener("click", async (event) => {
     const resp = await fetch(`/api/users/${btn.dataset.userId}/reset-password`, { method: "POST" });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.detail || "重置失败");
-    status.textContent = `密码已重置。新密码设置链接：${data.signupUrl}`;
-    status.className = "status success";
     await Promise.all([loadUsers(), loadActivityLogs()]);
+    status.textContent = data.mustSetPassword
+      ? `已重置 ${data.username} 的密码。请使用默认密码登录后设置个人密码。`
+      : `密码已重置。新密码设置链接：${data.signupUrl}`;
+    status.className = "status success";
   } catch (err) {
     status.textContent = err.message || String(err);
     status.className = "status error";
@@ -149,7 +151,7 @@ async function openUserPermissionEditor(userId) {
   const user = managedUsers.find((item) => item.id === userId);
   if (!user) return;
   if (!managedRoles.length) await loadRoles();
-  $("#user-permission-title").textContent = `更新权限 · ${user.displayName || user.email}`;
+  $("#user-permission-title").textContent = `更新权限 · ${user.displayName || user.email || user.username}`;
   $("#user-permission-id").value = String(user.id);
   $("#user-permission-options").innerHTML = renderRoleOptions(managedRoles, user.roles || []);
   $("#user-permission-status").textContent = "";
