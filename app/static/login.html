@@ -49,8 +49,6 @@
           throw new Error(err.detail || "登录失败");
         }
         sessionStorage.setItem("boyuan_current_user", JSON.stringify(data.user));
-        sessionStorage.removeItem("boyuan_fun_facts_v1");
-        sessionStorage.removeItem("boyuan_fun_facts_v2");
         window.location.href = "/";
       } catch (err) {
         errEl.textContent = err.message || String(err);

@@ -50,14 +50,10 @@ function showHomeFunFact() {
 
 async function loadHomeFunFacts() {
   try {
-    const cached = JSON.parse(sessionStorage.getItem("boyuan_fun_facts_v2") || "[]");
-    if (Array.isArray(cached) && cached.length === 10) { renderHomeFunFacts(cached); return; }
-  } catch (_) {}
-  try {
     const response = await fetch("/api/fun-facts", {cache:"no-store"});
     if (!response.ok) throw new Error("趣味知识加载失败");
     const data = await response.json();
-    sessionStorage.setItem("boyuan_fun_facts_v2", JSON.stringify(data.facts || []));
+    if (!Array.isArray(data.facts) || !data.facts.length) throw new Error("趣味知识为空");
     renderHomeFunFacts(data.facts);
   } catch (_) {
     $("#home-fun-fact-english").textContent = "Fun facts are temporarily unavailable.";
@@ -295,6 +291,7 @@ document.querySelectorAll(".nav-item[data-view]").forEach((item) => {
     document.querySelectorAll(".view").forEach((el) => el.classList.remove("active"));
     item.classList.add("active");
     $(`#view-${item.dataset.view}`)?.classList.add("active");
+    if (item.dataset.view === "home") loadHomeFunFacts();
     if (item.dataset.view === "activity-logs") loadActivityLogs();
     if (item.dataset.view === "asset-ledger") renderAssetLedgerAll();
     if (item.dataset.view === "stock-orders") loadStockOrders();

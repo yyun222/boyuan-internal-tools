@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from datetime import date, datetime, timedelta
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
@@ -49,6 +49,7 @@ from app.services.stock_orders import (
 )
 from app.services.cafeteria_access import has_cafeteria_access, refresh_locked_roles
 from app.services.export import build_workbook
+from app.services.home_facts import select_home_facts
 from app.services.reconcile import reconcile
 
 APP_DIR = Path(__file__).resolve().parent
@@ -56,8 +57,6 @@ PROJECT_DIR = APP_DIR.parent
 STATIC_DIR = APP_DIR / "static"
 
 HOLIDAY_API = "https://api.jiejiariapi.com/v1/holidays/{year}"
-FUN_FACTS_API = "https://factfacts.com/api.php?count=10"
-TRANSLATION_API = "https://apis.uctb.cn/api/qqfy"
 
 logger = logging.getLogger(__name__)
 
@@ -593,54 +592,10 @@ async def api_cafeteria_password(payload: CafeteriaPasswordPayload, request: Req
 
 
 
-def _fetch_fun_facts() -> list[dict]:
-    request = UrlRequest(FUN_FACTS_API, headers={"User-Agent": "boyuan-internal-tools/1.0"})
-    with urlopen(request, timeout=10) as response:
-        payload = json.load(response)
-    facts = payload.get("facts", []) if isinstance(payload, dict) else []
-    if payload.get("ok") is not True or not isinstance(facts, list) or not facts:
-        raise ValueError("FactFacts API returned no facts")
-    return [fact for fact in facts if isinstance(fact, dict) and fact.get("text")][:10]
-
-
-def _translate_fun_fact(text: str) -> str:
-    query = urlencode({
-        "ckey": settings.translation_api_key,
-        "encoding": "json",
-        "text": text,
-    })
-    request = UrlRequest(
-        f"{TRANSLATION_API}?{query}",
-        headers={"User-Agent": "boyuan-internal-tools/1.0"},
-    )
-    with urlopen(request, timeout=10) as response:
-        payload = json.load(response)
-    data = payload.get("data", {}) if isinstance(payload, dict) else {}
-    result = data.get("result") if isinstance(data, dict) else None
-    if payload.get("code") != 200 or not result:
-        raise ValueError("Translation API returned no result")
-    return str(result)
-
-
 @app.get("/api/fun-facts")
 async def api_fun_facts(request: Request, db: Session = Depends(get_db)):
     _require_user(request, db)
-    try:
-        facts = await asyncio.to_thread(_fetch_fun_facts)
-        translations = await asyncio.gather(*(
-            asyncio.to_thread(_translate_fun_fact, str(fact["text"])) for fact in facts
-        ))
-        return {"facts": [
-            {
-                "english": str(fact["text"]),
-                "chinese": translated,
-                "category": str(fact.get("category") or ""),
-            }
-            for fact, translated in zip(facts, translations)
-        ]}
-    except Exception as exc:
-        logger.warning("Unable to fetch or translate fun facts: %s", exc)
-        raise HTTPException(503, "暂时无法获取趣味知识") from exc
+    return {"facts": select_home_facts()}
 
 
 @app.get("/api/next-holiday")

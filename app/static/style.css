@@ -288,8 +288,6 @@ body.sidebar-open .sidebar-overlay {
 .home-fact-arrow { align-self:center; flex:0 0 auto; padding:10px; border:0; background:transparent; color:#86868b; font-size:30px; font-weight:400; line-height:1; box-shadow:none; }
 .home-fact-arrow:hover { background:transparent; color:#515154; transform:scale(1.08); }
 .home-fact-arrow:disabled { color:#d2d2d7; }
-.home-fact-source { color:#86868b; font-size:12px; text-decoration:none; }
-.home-fact-source:hover { color:#1d1d1f; text-decoration:underline; }
 
 /* ----- Cards (floating, Apple-style) ----- */
 .card {
@@ -1231,6 +1229,13 @@ tr.name-mismatch:hover td { background: #ffe6e3; }
   flex-shrink: 0;
   white-space: nowrap;
   margin-bottom: 0;
+  border-radius: 8px;
+}
+
+#cafeteria-pages .tab:hover:not(:disabled) {
+  background: #e9e9ed;
+  box-shadow: none;
+  transform: none;
 }
 
 .cafeteria-cell-label { display: none; }
