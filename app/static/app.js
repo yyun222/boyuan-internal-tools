@@ -17,10 +17,10 @@ let lastResult = null;
 let currentUser = null;
 
 const beijingDateFormatter = new Intl.DateTimeFormat("zh-CN", {
-  timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit", weekday:"long",
+  timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", weekday: "long",
 });
 const beijingTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
-  timeZone:"Asia/Shanghai", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false,
+  timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
 });
 let homeFunFacts = [];
 let homeFunFactIndex = 0;
@@ -50,7 +50,7 @@ function showHomeFunFact() {
 
 async function loadHomeFunFacts() {
   try {
-    const response = await fetch("/api/fun-facts", {cache:"no-store"});
+    const response = await fetch("/api/fun-facts", { cache: "no-store" });
     if (!response.ok) throw new Error("趣味知识加载失败");
     const data = await response.json();
     if (!Array.isArray(data.facts) || !data.facts.length) throw new Error("趣味知识为空");
@@ -65,7 +65,7 @@ async function loadNextHoliday() {
   const target = $("#home-holiday-countdown");
   if (!target) return;
   try {
-    const response = await fetch("/api/next-holiday", {cache:"no-store"});
+    const response = await fetch("/api/next-holiday", { cache: "no-store" });
     if (!response.ok) throw new Error("节假日加载失败");
     const data = await response.json();
     const holiday = data.holiday;
@@ -92,16 +92,8 @@ $("#home-next-fun-fact")?.addEventListener("click", () => {
   showHomeFunFact();
 });
 
-// --- Auth: reuse the permission snapshot returned by login. Direct visits and
-// new tabs fall back to one /api/me request; backend authorization remains live.
-const cachedLoginUser = (() => {
-  try { return JSON.parse(sessionStorage.getItem("boyuan_current_user") || "null"); }
-  catch (_) { return null; }
-})();
-
-const currentUserRequest = cachedLoginUser?.email
-  ? Promise.resolve({user: cachedLoginUser})
-  : fetch("/api/me", { cache: "no-store" })
+// 以服务端会话为准，避免 OA 切换账号后复用旧标签页的权限快照。
+const currentUserRequest = fetch("/api/me", { cache: "no-store" })
   .then((r) => {
     if (r.status === 401) {
       window.location.replace("/login");
@@ -153,6 +145,7 @@ function applyPermissions(user) {
   const reconcileView = $("#view-reconcile");
   const assetLedgerNav = $("#asset-ledger-nav");
   const adminNav = $("#admin-nav");
+  const oaTodoConfigNav = $("#oa-todo-config-nav");
   const activityLogsNav = $("#activity-logs-nav");
   const stockOrdersNav = $("#stock-orders-nav");
 
@@ -162,6 +155,7 @@ function applyPermissions(user) {
   }
   if (permissions.manageUsers) {
     adminNav?.classList.remove("hidden");
+    oaTodoConfigNav?.classList.remove("hidden");
     activityLogsNav?.classList.remove("hidden");
   }
   if (!permissions.viewAssetLedger) {
@@ -296,5 +290,6 @@ document.querySelectorAll(".nav-item[data-view]").forEach((item) => {
     if (item.dataset.view === "asset-ledger") renderAssetLedgerAll();
     if (item.dataset.view === "stock-orders") loadStockOrders();
     if (item.dataset.view === "cafeteria") window.loadCafeteria();
+    if (item.dataset.view === "oa-todo-config") loadOaTodoConfig();
   });
 });

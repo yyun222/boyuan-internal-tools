@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Boyuan Internal Tools</title>
-  <link rel="stylesheet" href="/static/style.css?v=cafeteria-tab-hover-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20261124-merged-1" />
 </head>
+
 <body>
   <header class="topbar">
     <button id="menu-btn" class="menu-btn" aria-label="菜单" type="button">
@@ -24,7 +26,8 @@
   <div class="layout">
     <div id="sidebar-overlay" class="sidebar-overlay"></div>
     <aside class="sidebar" id="sidebar">
-      <button id="sidebar-collapse-btn" class="sidebar-collapse-btn" type="button" aria-label="隐藏左侧菜单" title="隐藏左侧菜单">←</button>
+      <button id="sidebar-collapse-btn" class="sidebar-collapse-btn" type="button" aria-label="隐藏左侧菜单"
+        title="隐藏左侧菜单">←</button>
       <nav>
         <ul>
           <li class="nav-item active" data-view="home">
@@ -60,6 +63,11 @@
           <li class="nav-item hidden" data-view="activity-logs" id="activity-logs-nav">
             <span class="nav-icon">🧾</span>
             <span class="nav-label">活动日志</span>
+          </li>
+
+          <li class="nav-item hidden" data-view="oa-todo-config" id="oa-todo-config-nav">
+            <span class="nav-icon">🔔</span>
+            <span class="nav-label">OA待办配置</span>
           </li>
         </ul>
       </nav>
@@ -140,32 +148,45 @@
           <div class="card">
             <h2>③ 明细</h2>
             <div class="tabs" id="tabs">
-              <button class="tab active" data-tab="mismatches">数量差异 <span class="badge" id="badge-mismatches">0</span></button>
-              <button class="tab" data-tab="mapped_no_wh_balance">已映射但仓库无余额 <span class="badge" id="badge-mapped_no_wh_balance">0</span></button>
-              <button class="tab" data-tab="fin_no_mapping">财务系统无映射 <span class="badge" id="badge-fin_no_mapping">0</span></button>
+              <button class="tab active" data-tab="mismatches">数量差异 <span class="badge"
+                  id="badge-mismatches">0</span></button>
+              <button class="tab" data-tab="mapped_no_wh_balance">已映射但仓库无余额 <span class="badge"
+                  id="badge-mapped_no_wh_balance">0</span></button>
+              <button class="tab" data-tab="fin_no_mapping">财务系统无映射 <span class="badge"
+                  id="badge-fin_no_mapping">0</span></button>
               <button class="tab" data-tab="wh_only">仅在仓库 <span class="badge" id="badge-wh_only">0</span></button>
               <button class="tab" data-tab="matches">完全匹配 <span class="badge" id="badge-matches">0</span></button>
             </div>
 
             <div class="tab-panel active" data-panel="mismatches">
               <p class="panel-hint">财务和仓库都有，但数量不一致。按差额绝对值降序排列；红色行表示物料名称疑似不匹配（可能是代码对应表错位）。</p>
-              <div class="table-wrap"><table id="tbl-mismatches"></table></div>
+              <div class="table-wrap">
+                <table id="tbl-mismatches"></table>
+              </div>
             </div>
             <div class="tab-panel" data-panel="mapped_no_wh_balance">
               <p class="panel-hint">财务系统有该物料，且代码对应表给出了仓库代码，但仓库余额表中查不到该编码。</p>
-              <div class="table-wrap"><table id="tbl-mapped_no_wh_balance"></table></div>
+              <div class="table-wrap">
+                <table id="tbl-mapped_no_wh_balance"></table>
+              </div>
             </div>
             <div class="tab-panel" data-panel="fin_no_mapping">
               <p class="panel-hint">财务系统中存在的物料，在代码对应表里没有对应的仓库代码。</p>
-              <div class="table-wrap"><table id="tbl-fin_no_mapping"></table></div>
+              <div class="table-wrap">
+                <table id="tbl-fin_no_mapping"></table>
+              </div>
             </div>
             <div class="tab-panel" data-panel="wh_only">
               <p class="panel-hint">仓库余额表中存在，但在财务系统中没有对应物料。</p>
-              <div class="table-wrap"><table id="tbl-wh_only"></table></div>
+              <div class="table-wrap">
+                <table id="tbl-wh_only"></table>
+              </div>
             </div>
             <div class="tab-panel" data-panel="matches">
               <p class="panel-hint">数量完全一致的项目。</p>
-              <div class="table-wrap"><table id="tbl-matches"></table></div>
+              <div class="table-wrap">
+                <table id="tbl-matches"></table>
+              </div>
             </div>
           </div>
         </section>
@@ -234,26 +255,69 @@
 
       <section id="view-stock-orders" class="view">
         <div class="view-header stock-head">
-          <div><h1>备货订单跟进</h1><p class="view-desc">销售、采购、生产与质量进度统一跟进</p></div>
-          <div class="stock-actions"><button id="stock-history-btn" type="button">历史记录</button><button id="stock-new-btn" class="primary" type="button">新建订单</button></div>
+          <div>
+            <h1>备货订单跟进</h1>
+            <p class="view-desc">销售、采购、生产与质量进度统一跟进</p>
+          </div>
+          <div class="stock-actions"><button id="stock-history-btn" type="button">历史记录</button><button
+              id="stock-new-btn" class="primary" type="button">新建订单</button></div>
         </div>
         <section class="card stock-filter-card">
           <div class="stock-filters">
             <input id="stock-q" placeholder="搜索订单号、客户、业务员、CAS、内部简称" />
-            <select id="stock-type"><option value="">全部类型</option><option>备货订单</option><option>现货留货</option></select>
-            <select id="stock-incomplete"><option value="">全部进度</option><option value="sales">销售未完成</option><option value="purchase">采购未完成</option><option value="production">生产未完成</option><option value="qc">质量未完成</option></select>
-            <input id="stock-from" type="date" title="创建开始日期" aria-label="创建开始日期" /><input id="stock-to" type="date" title="创建结束日期" aria-label="创建结束日期" />
+            <select id="stock-type">
+              <option value="">全部类型</option>
+              <option>备货订单</option>
+              <option>现货留货</option>
+            </select>
+            <select id="stock-incomplete">
+              <option value="">全部进度</option>
+              <option value="sales">销售未完成</option>
+              <option value="purchase">采购未完成</option>
+              <option value="production">生产未完成</option>
+              <option value="qc">质量未完成</option>
+            </select>
+            <input id="stock-from" type="date" title="创建开始日期" aria-label="创建开始日期" /><input id="stock-to" type="date"
+              title="创建结束日期" aria-label="创建结束日期" />
             <button id="stock-search-btn" type="button">查询</button>
           </div>
         </section>
         <section class="card stock-list-card">
-          <div class="table-wrap"><table class="stock-table"><thead><tr><th>订单号</th><th>操作</th><th>业务员</th><th>客户</th><th>产品/CAS</th><th><button type="button" class="stock-sort" data-stock-sort="quantity">数量 <span></span></button></th><th>销售</th><th>采购</th><th>生产</th><th>质量</th><th>交货期需求</th><th><button type="button" class="stock-sort" data-stock-sort="actual_delivery">实际交货日期 <span></span></button></th><th><button type="button" class="stock-sort" data-stock-sort="created_at">创建时间 <span></span></button></th><th><button type="button" class="stock-sort" data-stock-sort="updated_at">更新 <span></span></button></th><th>类型</th></tr></thead><tbody id="stock-rows"></tbody></table></div>
+          <div class="table-wrap">
+            <table class="stock-table">
+              <thead>
+                <tr>
+                  <th>订单号</th>
+                  <th>操作</th>
+                  <th>业务员</th>
+                  <th>客户</th>
+                  <th>产品/CAS</th>
+                  <th><button type="button" class="stock-sort" data-stock-sort="quantity">数量 <span></span></button></th>
+                  <th>销售</th>
+                  <th>采购</th>
+                  <th>生产</th>
+                  <th>质量</th>
+                  <th>交货期需求</th>
+                  <th><button type="button" class="stock-sort" data-stock-sort="actual_delivery">实际交货日期
+                      <span></span></button></th>
+                  <th><button type="button" class="stock-sort" data-stock-sort="created_at">创建时间 <span></span></button>
+                  </th>
+                  <th><button type="button" class="stock-sort" data-stock-sort="updated_at">更新 <span></span></button>
+                  </th>
+                  <th>类型</th>
+                </tr>
+              </thead>
+              <tbody id="stock-rows"></tbody>
+            </table>
+          </div>
           <div id="stock-pagination" class="stock-pagination"></div>
         </section>
       </section>
 
       <section id="view-cafeteria" class="view">
-        <div class="view-header"><h1>食堂管理</h1></div>
+        <div class="view-header">
+          <h1>食堂管理</h1>
+        </div>
         <section class="card admin-card">
           <div id="cafeteria-toolbar">
             <label><span>食堂</span> <select id="cafeteria-site" aria-label="食堂"></select></label>
@@ -265,10 +329,31 @@
           <div id="cafeteria-content"></div>
         </section>
         <dialog id="cafeteria-dialog" class="stock-modal">
-          <div class="stock-modal-head"><h3 id="cafeteria-dialog-title"></h3><button type="button" data-caf-close aria-label="关闭">×</button></div>
+          <div class="stock-modal-head">
+            <h3 id="cafeteria-dialog-title"></h3><button type="button" data-caf-close aria-label="关闭">×</button>
+          </div>
           <div id="cafeteria-dialog-body" class="admin-card"></div>
           <div id="cafeteria-dialog-status" class="status" role="status"></div>
         </dialog>
+      </section>
+
+      <section id="view-oa-todo-config" class="view">
+        <div class="view-header">
+          <h1>OA待办配置-备货订单模块</h1>
+          <p class="view-desc">配置备货订单各部门的待办接收人和内容</p>
+        </div>
+        <section class="card admin-card" id="oa-todo-config-card">
+          <div class="card-header">
+            <h2>部门配置</h2>
+            <button type="button" id="refresh-oa-todo-config">刷新</button>
+          </div>
+          <p id="oa-todo-config-connection" class="muted"></p>
+          <form id="oa-todo-config-form" class="oa-todo-config-form">
+            <div id="oa-todo-departments"></div>
+            <div class="admin-actions"><button type="submit" class="primary" id="save-oa-todo-config">保存配置</button><span
+                id="oa-todo-config-status" class="status" role="status"></span></div>
+          </form>
+        </section>
       </section>
 
       <section id="view-admin" class="view">
@@ -306,7 +391,9 @@
             <button type="button" id="refresh-users">刷新</button>
           </div>
           <div id="user-status" class="status"></div>
-          <div class="table-wrap"><table id="user-table"></table></div>
+          <div class="table-wrap">
+            <table id="user-table"></table>
+          </div>
         </section>
       </section>
 
@@ -320,7 +407,9 @@
             <h2>操作日志</h2>
             <button type="button" id="refresh-logs">刷新</button>
           </div>
-          <div class="table-wrap"><table id="activity-log-table"></table></div>
+          <div class="table-wrap">
+            <table id="activity-log-table"></table>
+          </div>
         </section>
       </section>
 
@@ -328,6 +417,25 @@
         <div class="asset-modal">
           <h3 id="asset-modal-title">登记</h3>
           <div id="asset-modal-body"></div>
+        </div>
+      </div>
+      <div class="modal-mask" id="user-oa-phone-mask">
+        <div class="asset-modal user-permission-modal">
+          <h3 id="user-oa-phone-title">OA 登录手机号</h3>
+          <form id="user-oa-phone-form">
+            <input id="user-oa-phone-id" type="hidden" />
+            <div class="user-permission-body">
+              <label for="user-oa-phone-input">OA 登录手机号</label>
+              <input id="user-oa-phone-input" type="tel" inputmode="numeric" maxlength="11" autocomplete="off"
+                placeholder="中国大陆 11 位手机号" />
+              <p class="muted">请核对 OA 登录手机号与账号本人一致。留空保存可取消 OA 登录关联；账号仍须完成注册并启用。</p>
+              <div id="user-oa-phone-status" class="status" role="status"></div>
+            </div>
+            <div class="user-permission-footer">
+              <button type="button" data-user-oa-phone-close>取消</button>
+              <button id="user-oa-phone-submit" class="primary" type="submit">保存手机号</button>
+            </div>
+          </form>
         </div>
       </div>
       <div class="modal-mask" id="user-permission-mask">
@@ -347,17 +455,53 @@
           </form>
         </div>
       </div>
-      <div class="modal-mask" id="stock-modal-mask"><div class="stock-modal"><div class="stock-modal-head"><div><h3 id="stock-modal-title">订单</h3><span id="stock-modal-number"></span></div><button type="button" data-stock-close>×</button></div><div id="stock-modal-body"></div></div></div>
-      <div class="modal-mask" id="stock-history-mask"><div class="stock-modal stock-history-modal"><div class="stock-modal-head"><h3>备货订单历史</h3><button type="button" data-stock-history-close>×</button></div><div class="stock-history-filters"><input id="stock-history-order" placeholder="订单号" /><input id="stock-history-operator" placeholder="操作人" /><input id="stock-history-month" type="month" title="订单创建月份" /><button id="stock-history-search" type="button">查询</button><button id="stock-orders-export" type="button">导出 CSV</button><button id="stock-performance-export" type="button">导出绩效 CSV</button><button id="stock-history-export" type="button">导出修改记录</button></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>订单号</th><th>模块/动作</th><th>内容</th><th>操作人</th><th>原因</th></tr></thead><tbody id="stock-history-rows"></tbody></table></div></div></div>
+      <div class="modal-mask" id="stock-modal-mask">
+        <div class="stock-modal">
+          <div class="stock-modal-head">
+            <div>
+              <h3 id="stock-modal-title">订单</h3><span id="stock-modal-number"></span>
+            </div><button type="button" data-stock-close>×</button>
+          </div>
+          <div id="stock-modal-body"></div>
+        </div>
+      </div>
+      <div class="modal-mask" id="stock-history-mask">
+        <div class="stock-modal stock-history-modal">
+          <div class="stock-modal-head">
+            <h3>备货订单历史</h3><button type="button" data-stock-history-close>×</button>
+          </div>
+          <div class="stock-history-filters"><input id="stock-history-order" placeholder="订单号" /><input
+              id="stock-history-operator" placeholder="操作人" /><input id="stock-history-month" type="month"
+              title="订单创建月份" /><button id="stock-history-search" type="button">查询</button><button
+              id="stock-orders-export" type="button">导出 CSV</button><button id="stock-performance-export"
+              type="button">导出绩效 CSV</button><button id="stock-history-export" type="button">导出修改记录</button></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>订单号</th>
+                  <th>模块/动作</th>
+                  <th>内容</th>
+                  <th>操作人</th>
+                  <th>原因</th>
+                </tr>
+              </thead>
+              <tbody id="stock-history-rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
 
-  <script src="/static/app.js?v=home-facts-2"></script>
-  <script src="/static/admin.js?v=cafeteria-password-1"></script>
+  <script src="/static/app.js?v=20261124-merged-1"></script>
+  <script src="/static/admin.js?v=20261124-merged-1"></script>
   <script src="/static/reconcile.js?v=20260717-static-split-v1"></script>
   <script src="/static/assets.js?v=20260717-static-split-v1"></script>
-  <script src="/static/stock-orders.js?v=20261014-stock-summary-cas"></script>
+  <script src="/static/stock-orders.js?v=20261123-notify-copy-summary-v1"></script>
   <script src="/static/cafeteria.js?v=cafeteria-mobile-3"></script>
-  <script src="/static/bootstrap.js?v=cafeteria-password-1"></script>
+  <script src="/static/bootstrap.js?v=20261124-merged-1"></script>
 </body>
+
 </html>

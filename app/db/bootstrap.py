@@ -1,6 +1,6 @@
 """Schema compatibility checks and initial role/user seed data."""
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from app.auth import hash_password, utcnow
 from app.config import settings
@@ -121,6 +121,21 @@ def _ensure_legacy_columns(engine) -> None:
 
 
 def init_database(engine, session_factory) -> None:
+    if engine.dialect.name == "mysql":
+        schema = inspect(engine)
+        if not schema.has_table("users") or (
+            "oa_login_phone" not in {column["name"] for column in schema.get_columns("users")}
+            or not schema.has_table("oa_sso_credentials")
+            or not any(
+                item.get("column_names") == ["oa_login_phone"]
+                for item in schema.get_unique_constraints("users")
+            )
+            or not {"nonce_hash", "expires_at", "consumed_at"}.issubset(
+                column["name"] for column in schema.get_columns("oa_sso_credentials")
+            )
+            or schema.get_pk_constraint("oa_sso_credentials").get("constrained_columns") != ["nonce_hash"]
+        ):
+            raise RuntimeError("请先手工执行 sql/2026-11-18_oa_sso.sql，再启动新版应用；不会自动升级 OA 数据库结构。")
     Base.metadata.create_all(bind=engine)
     _ensure_legacy_columns(engine)
     with session_factory() as db:
