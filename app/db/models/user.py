@@ -23,6 +23,7 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String(255), unique=True, index=True)
     username = Column(String(255), unique=True, index=True)
+    oa_login_phone = Column(String(11), nullable=True, unique=True)
     display_name = Column(String(120), nullable=False)
     password_hash = Column(String(255))
     is_active = Column(Boolean, nullable=False, default=True)

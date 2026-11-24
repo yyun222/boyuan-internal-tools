@@ -100,3 +100,11 @@ class StockOrderWarning(Base):
     threshold_at = Column(DateTime)
     occurred_at = Column(DateTime, nullable=False, default=utcnow, index=True)
     detail = Column(Text, nullable=False, default="")
+
+
+class OaTodoConfig(Base):
+    __tablename__ = "oa_todo_configs"
+    id = Column(Integer, primary_key=True)
+    department_configs = Column(Text, nullable=False, default="{}")
+    updated_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    updated_at = Column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)

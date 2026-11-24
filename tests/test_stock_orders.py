@@ -129,14 +129,14 @@ class StockOrderRegressionTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "总数量"):
             _validate_stock_completion_quantities(saved, "sales")
 
-    def test_delivery_fields_must_be_all_filled_or_all_empty(self) -> None:
+    def test_delivery_items_still_require_quantity(self) -> None:
         order = StockOrder(order_no="TEST-DELIVERY-VALIDATION", order_type="备货订单")
         self.db.add(order)
         self.db.flush()
 
         with self.assertRaisesRegex(Exception, "必须填写"):
             _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
-                "delivery_items": '[{"date":"2026-07-20","quantity":"10 kg","note":""}]',
+                "delivery_items": '[{"date":"2026-07-20","quantity":"","note":""}]',
             }), order)
 
     def test_latest_delivery_item_date_becomes_actual_delivery(self) -> None:
@@ -295,9 +295,9 @@ class StockOrderRegressionTests(unittest.TestCase):
         self.db.add(order)
         self.db.flush()
 
-        with self.assertRaisesRegex(Exception, "生产数量和备注"):
+        with self.assertRaisesRegex(Exception, "日期和生产数量"):
             _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
-                "production_actual_items": '[{"date":"2026-07-20","quantity":"10 kg","note":""}]',
+                "production_actual_items": '[{"date":"2026-07-20","quantity":"","note":""}]',
             }), order)
 
     def test_item_ids_are_persisted_and_sorted(self) -> None:
@@ -318,10 +318,58 @@ class StockOrderRegressionTests(unittest.TestCase):
         self.db.add(order)
         self.db.flush()
 
-        with self.assertRaisesRegex(Exception, "日期和备注"):
+        with self.assertRaisesRegex(Exception, "日期"):
             _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
-                "qc_expected_items": '[{"date":"2026-07-20","note":""}]',
+                "qc_expected_items": '[{"date":"","note":""}]',
             }), order)
+
+    def test_item_notes_are_optional_for_save_and_completion(self) -> None:
+        for index, note in enumerate((None, "", "   ", "保留备注")):
+            with self.subTest(note=note):
+                order = StockOrder(
+                    order_no=f"TEST-OPTIONAL-NOTES-{index}",
+                    order_type="备货订单", quantity="10 kg",
+                )
+                self.db.add(order)
+                self.db.flush()
+                fields = {}
+                for key in (
+                    "delivery_items", "production_expected_items", "production_actual_items",
+                    "qc_expected_items", "qc_actual_items",
+                ):
+                    item = {"date": "2026-07-20"}
+                    if not key.startswith("qc_"):
+                        item["quantity"] = "10 kg"
+                    if note is not None:
+                        item["note"] = note
+                    fields[key] = json.dumps([item])
+
+                saved = _save_stock_order(self.db, self.admin, StockOrderPayload(fields=fields), order)
+
+                for key in fields:
+                    self.assertEqual(json.loads(getattr(saved, key))[0].get("note"), note)
+                for module in ("sales", "production", "qc"):
+                    _validate_stock_completion_quantities(saved, module)
+
+    def test_item_notes_do_not_replace_required_dates_or_quantities(self) -> None:
+        order = StockOrder(order_no="TEST-NOTES-REQUIRED-FIELDS", order_type="备货订单")
+        self.db.add(order)
+        self.db.flush()
+        for key in (
+            "delivery_items", "production_expected_items", "production_actual_items",
+            "qc_expected_items", "qc_actual_items",
+        ):
+            invalid_items = [{"note": "仅填写备注"}]
+            if not key.startswith("qc_"):
+                invalid_items.extend([
+                    {"date": "2026-07-20", "note": "缺少数量"},
+                    {"quantity": "10 kg", "note": "缺少日期"},
+                ])
+            for item in invalid_items:
+                with self.subTest(field=key, item=item), self.assertRaisesRegex(Exception, "必须填写"):
+                    _save_stock_order(self.db, self.admin, StockOrderPayload(fields={
+                        key: json.dumps([item]),
+                    }), order)
 
     def test_qc_items_do_not_require_quantity(self) -> None:
         order = StockOrder(order_no="TEST-QC-NO-QUANTITY", order_type="备货订单")

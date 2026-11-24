@@ -15,8 +15,8 @@ from html import escape
 from pathlib import Path
 from typing import Literal, Optional
 
-from datetime import date, datetime, timedelta
-from urllib.parse import quote
+from datetime import date, datetime, timedelta, timezone
+from urllib.parse import quote, urlencode
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import Numeric, and_, case, cast, or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.auth import (
@@ -40,9 +40,14 @@ from app.config import settings
 from app.session_middleware import CredentialSessionMiddleware
 from app.db import SessionLocal, engine, get_db, init_database
 from app.db.models import (
-    ActivityLog, AssetLedgerAsset, AssetLedgerLog, Role, StockOrder,
-    StockOrderChangeLog, StockOrderFieldUpdate, StockOrderWarning, User,
+    ActivityLog, AssetLedgerAsset, AssetLedgerLog, OaTodoConfig, Role, StockOrder,
+    StockOrderChangeLog, StockOrderFieldUpdate, StockOrderWarning, User, OaSsoCredential,
 )
+from app.services.oa_sso import (
+    OA_HEADERS, OaEntryPrivacyMiddleware, OaSsoError, masked_phone,
+    normalize_oa_phone, verify_oa_query,
+)
+from app.services.oa_todo import build_todo_context, send_todo
 from app.services.stock_orders import (
     FIELD_META, MODULES, business_date, business_datetime, can_edit_module, clean_fields, field_locks, is_admin,
     order_payload, schedule_warning_details, sync_order_warnings, user_modules,
@@ -69,6 +74,7 @@ app.add_middleware(
     https_only=settings.session_cookie_secure,
     max_age=settings.session_max_age_seconds,
 )
+app.add_middleware(OaEntryPrivacyMiddleware)
 init_database(engine, SessionLocal)
 
 
@@ -309,6 +315,10 @@ class UserRolesPayload(BaseModel):
     roles: list[str]
 
 
+class OaPhonePayload(BaseModel):
+    oa_login_phone: Optional[str] = Field(default=None, max_length=64)
+
+
 class StockOrderPayload(BaseModel):
     fields: dict[str, object]
     reason: str = ""
@@ -321,6 +331,20 @@ class StockCompletePayload(BaseModel):
 
 class StockCancelPayload(BaseModel):
     reason: str
+
+
+class OaTodoDepartmentConfig(BaseModel):
+    user_ids: list[int] = Field(default_factory=list)
+    subject: str = Field(max_length=255)
+    link: str = Field(max_length=2000)
+
+
+class OaTodoConfigPayload(BaseModel):
+    departments: dict[str, OaTodoDepartmentConfig]
+
+
+class OaTodoRetryPayload(BaseModel):
+    departments: list[str]
 
 
 ASSET_FIELD_MAP = {
@@ -564,6 +588,65 @@ async def api_logout(request: Request, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+def _oa_error(detail: str, status_code: int = 400) -> HTMLResponse:
+    return HTMLResponse(_error_page(status_code, detail), status_code=status_code, headers=OA_HEADERS)
+
+
+@app.get("/auth/oa")
+async def page_oa_login(request: Request, db: Session = Depends(get_db)):
+    request.scope["write_session_cookie"] = True
+    request.session.clear()
+    try:
+        credential = verify_oa_query(request.scope.get("oa_query_string", b""), settings)
+    except OaSsoError as exc:
+        return _oa_error(str(exc))
+    try:
+        user = db.query(User).filter(User.oa_login_phone == credential.phone).one_or_none()
+        if user is None:
+            return _oa_error("该 OA 手机号未关联账号，请联系管理员配置 OA 登录手机号", 403)
+        if user.deleted_at is not None:
+            return _oa_error("账号不可用，请联系管理员", 403)
+        if not user.password_hash or not user.password_set_at:
+            return _oa_error("请先完成本系统注册，再从 OA 登录", 403)
+        if not user.is_active:
+            return _oa_error("账号不可用，请联系管理员", 403)
+        now = utcnow()
+        expires_at = datetime.fromtimestamp(credential.expires_at, timezone.utc).replace(tzinfo=None)
+        if expires_at <= now:
+            return _oa_error("登录链接已失效，请回到 OA 重新点击")
+        db.query(OaSsoCredential).filter(OaSsoCredential.expires_at <= now).delete(synchronize_session=False)
+        db.add(OaSsoCredential(nonce_hash=credential.nonce_hash, expires_at=expires_at, consumed_at=now))
+        # 凭证消费与登录日志在同一事务提交，唯一主键阻止并发重复登录。
+        user.last_activity_at = now
+        db.add(ActivityLog(user_id=user.id, action="oa_login", target="auth", detail="用户通过 OA 登录"))
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return _oa_error("登录链接已失效，请回到 OA 重新点击")
+    except SQLAlchemyError:
+        db.rollback()
+        return _oa_error("OA 登录暂不可用，请稍后重试或联系管理员", 503)
+    _start_session(request, user)
+    request.session.update(oa_login_pending=user.id, oa_return_to=credential.next_path)
+    return RedirectResponse("/auth/oa/complete", status_code=303, headers=OA_HEADERS)
+
+
+@app.get("/auth/oa/complete")
+async def page_oa_complete(request: Request, db: Session = Depends(get_db)):
+    user = _current_user(db, request)
+    if user is None or request.session.pop("oa_login_pending", None) != user.id:
+        return _oa_error("请从 OA 重新进入")
+    next_path = request.session.pop("oa_return_to", "/?view=stock-orders")
+    nonce = secrets.token_urlsafe(24)
+    headers = {**OA_HEADERS, "Content-Security-Policy": f"default-src 'none'; script-src 'nonce-{nonce}'; base-uri 'none'; frame-ancestors 'none'"}
+    return HTMLResponse(f'''<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="referrer" content="no-referrer"><title>正在进入系统</title></head>
+<body><p>登录成功，正在进入系统…</p><script nonce="{nonce}">
+try {{ sessionStorage.removeItem("boyuan_current_user"); }} catch (_) {{}}
+window.location.replace({json.dumps(next_path, ensure_ascii=False)});
+</script><noscript>请启用 JavaScript 后从 OA 重新进入。</noscript></body></html>''', headers=headers)
+
+
 @app.get("/api/me")
 async def api_me(request: Request, db: Session = Depends(get_db)):
     user = _require_user(request, db, allow_password_setup=True)
@@ -640,6 +723,7 @@ async def api_users(request: Request, db: Session = Depends(get_db)):
                 "username": user.username,
                 "mustSetPassword": _must_set_password(user),
                 "displayName": user.display_name,
+                "oaLoginPhone": user.oa_login_phone,
                 "roles": _role_names(user),
                 "roleDisplayNames": _role_display_names(user),
                 "status": "active" if user.is_active and user.password_hash else "pending",
@@ -652,6 +736,108 @@ async def api_users(request: Request, db: Session = Depends(get_db)):
             for user in users
         ]
     }
+
+
+TODO_DEPARTMENTS = {"purchase": "采购部", "production": "生产部", "qc": "质量部"}
+
+
+def _oa_todo_department_configs(db: Session) -> dict:
+    row = db.get(OaTodoConfig, 1)
+    try:
+        configured = json.loads(row.department_configs) if row else {}
+    except (TypeError, ValueError):
+        configured = {}
+    return {
+        key: {
+            "userIds": configured.get(key, {}).get("userIds", []),
+            "subject": configured.get(key, {}).get("subject", "待填写" + label + "信息：{order_no}"),
+            "link": configured.get(key, {}).get("link", "/?view=stock-orders&stockOrder={order_id}"),
+        }
+        for key, label in TODO_DEPARTMENTS.items()
+    }
+
+
+@app.get("/api/admin/oa-todo-config")
+async def api_get_oa_todo_config(request: Request, db: Session = Depends(get_db)):
+    _require_permission(request, db, "can_manage_users")
+    users = db.query(User).filter(
+        User.deleted_at.is_(None), User.is_active.is_(True), User.oa_login_phone.isnot(None),
+        User.oa_login_phone != "", User.email != settings.initial_admin_email,
+    ).order_by(User.display_name, User.email).all()
+    return {
+        "departments": _oa_todo_department_configs(db),
+        "users": [{"id": user.id, "displayName": user.display_name, "email": user.email,
+                   "oaLoginPhone": user.oa_login_phone} for user in users],
+        "oaConfigured": bool(settings.oa_todo_username and settings.oa_todo_password),
+    }
+
+
+@app.put("/api/admin/oa-todo-config")
+async def api_save_oa_todo_config(payload: OaTodoConfigPayload, request: Request, db: Session = Depends(get_db)):
+    admin = _require_permission(request, db, "can_manage_users")
+    if set(payload.departments) != set(TODO_DEPARTMENTS):
+        raise HTTPException(400, "必须完整配置采购、生产和质量部门")
+    eligible_ids = {
+        row[0] for row in db.query(User.id).filter(
+            User.id.in_({user_id for config in payload.departments.values() for user_id in config.user_ids} or {-1}),
+            User.deleted_at.is_(None), User.is_active.is_(True), User.oa_login_phone.isnot(None),
+            User.oa_login_phone != "", User.email != settings.initial_admin_email,
+        ).all()
+    }
+    departments = {}
+    for key, config in payload.departments.items():
+        user_ids = list(dict.fromkeys(config.user_ids))
+        if not user_ids or any(user_id not in eligible_ids for user_id in user_ids):
+            raise HTTPException(400, f"{TODO_DEPARTMENTS[key]}必须选择已启用且配置 OA 手机号的用户")
+        if not config.subject.strip() or not config.link.strip():
+            raise HTTPException(400, f"{TODO_DEPARTMENTS[key]}待办标题和目标链接不能为空")
+        departments[key] = {
+            "userIds": user_ids,
+            "subject": config.subject.strip(),
+            "link": config.link.strip(),
+        }
+    row = db.get(OaTodoConfig, 1)
+    if row is None:
+        row = OaTodoConfig(id=1)
+        db.add(row)
+    row.department_configs = json.dumps(departments, ensure_ascii=False, separators=(",", ":"))
+    row.updated_by_user_id = admin.id
+    _log_activity(db, admin, "update_oa_todo_config", "oa-todo", "更新采购、生产、质量待办配置")
+    return {"ok": True, "departments": _oa_todo_department_configs(db)}
+
+
+@app.put("/api/users/{user_id}/oa-phone")
+async def api_update_user_oa_phone(
+    user_id: int, payload: OaPhonePayload, request: Request, db: Session = Depends(get_db),
+):
+    admin = _require_permission(request, db, "can_manage_users")
+    user = db.query(User).filter(
+        User.id == user_id, User.deleted_at.is_(None), User.email != settings.initial_admin_email,
+    ).one_or_none()
+    if user is None:
+        raise HTTPException(404, "用户不存在")
+    try:
+        phone = normalize_oa_phone(payload.oa_login_phone)
+    except OaSsoError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if user.oa_login_phone == phone:
+        return {"ok": True, "oaLoginPhone": phone}
+    if phone and db.query(User.id).filter(User.oa_login_phone == phone, User.id != user.id).first():
+        raise HTTPException(409, "该 OA 登录手机号已被其他账号占用，请核对绑定关系")
+    old_phone = user.oa_login_phone
+    user.oa_login_phone = phone
+    user.updated_at = utcnow()
+    db.add(ActivityLog(
+        user_id=admin.id, action="update_oa_phone", target="users",
+        detail=f"更新 {user.email} 的 OA 登录手机号：{masked_phone(old_phone)} → {masked_phone(phone)}",
+    ))
+    admin.last_activity_at = utcnow()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "该 OA 登录手机号已被其他账号占用，请核对绑定关系") from None
+    return {"ok": True, "oaLoginPhone": phone}
 
 
 @app.post("/api/users/{user_id}/reset-password")
@@ -1062,10 +1248,9 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
                 not isinstance(item, dict)
                 or not str(item.get("date") or "").strip()
                 or not str(item.get("quantity") or "").strip()
-                or not str(item.get("note") or "").strip()
                 for item in delivery_items
             ):
-                raise HTTPException(400, "每条交货明细都必须填写实际交货日期、交货数量和备注")
+                raise HTTPException(400, "每条交货明细都必须填写实际交货日期和交货数量")
             fields["actual_delivery"] = max(str(item["date"]).strip() for item in delivery_items)
         else:
             fields["actual_delivery"] = ""
@@ -1107,10 +1292,9 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
             not isinstance(item, dict)
             or not str(item.get(date_key) or "").strip()
             or not str(item.get("quantity") or "").strip()
-            or not str(item.get("note") or "").strip()
             for item in production_items
         ):
-            raise HTTPException(400, f"每条{label}都必须填写日期、生产数量和备注")
+            raise HTTPException(400, f"每条{label}都必须填写日期和生产数量")
         if field_key == "production_expected_items":
             fields["expected_delivery_date"] = max(
                 (str(item[date_key]).strip() for item in production_items), default=""
@@ -1129,10 +1313,9 @@ def _save_stock_order(db: Session, user: User, payload: StockOrderPayload, order
         if not isinstance(qc_items, list) or any(
             not isinstance(item, dict)
             or not str(item.get("date") or "").strip()
-            or not str(item.get("note") or "").strip()
             for item in qc_items
         ):
-            raise HTTPException(400, f"每条{label}都必须填写日期和备注")
+            raise HTTPException(400, f"每条{label}都必须填写日期")
         if field_key == "qc_expected_items":
             fields["coa_time"] = max((str(item["date"]).strip() for item in qc_items), default="")
     item_fields = {
@@ -1324,6 +1507,102 @@ async def api_create_stock_order(payload: StockOrderPayload, request: Request, d
     order = _save_stock_order(db, user, payload)
     _log_activity(db, user, "create_stock_order", "stock-orders", order.order_no)
     return {"ok": True, "order": order_payload(db, order, True)}
+
+
+@app.post("/api/stock-orders/submit-and-notify")
+async def api_submit_stock_order_and_notify(payload: StockOrderPayload, request: Request, db: Session = Depends(get_db)):
+    user = _require_permission(request, db, "can_update_stock_orders")
+    if not settings.oa_todo_username or not settings.oa_todo_password:
+        raise HTTPException(503, "OA 待办接口凭证尚未配置")
+    sales_fields = {key: value for key, value in payload.fields.items() if key in FIELD_META and FIELD_META[key][2] == "sales"}
+    if sales_fields.get("order_type", "备货订单") != "备货订单":
+        raise HTTPException(400, "只有备货订单可以提交并通知")
+    if not str(sales_fields.get("internal_name") or "").strip() or not str(sales_fields.get("quantity") or "").strip():
+        raise HTTPException(400, "请先填写产品简称和订单数量")
+    configured = _oa_todo_department_configs(db)
+    selected_ids = {user_id for item in configured.values() for user_id in item["userIds"]}
+    recipients = db.query(User).filter(
+        User.id.in_(selected_ids or {-1}), User.deleted_at.is_(None), User.is_active.is_(True),
+        User.oa_login_phone.isnot(None), User.oa_login_phone != "",
+    ).all()
+    recipients_by_id = {item.id: item for item in recipients}
+    if any(not item["userIds"] or any(user_id not in recipients_by_id for user_id in item["userIds"])
+           for item in configured.values()):
+        raise HTTPException(400, "待办接收人配置无效，请管理员检查用户启用状态和 OA 手机号")
+
+    order = _save_stock_order(db, user, StockOrderPayload(fields=sales_fields, reason=payload.reason))
+    _log_activity(db, user, "submit_stock_order_todos", "stock-orders", f"{order.order_no} · 提交并通知三部门")
+
+    contexts = {}
+    for department, config in configured.items():
+        phones = [recipients_by_id[user_id].oa_login_phone for user_id in config["userIds"]]
+        contexts[department] = build_todo_context(order, department, config, settings, phones)
+    results = await asyncio.gather(
+        *(asyncio.to_thread(send_todo, context, settings) for context in contexts.values()),
+        return_exceptions=True,
+    )
+    notifications = []
+    for (department, _), result in zip(contexts.items(), results):
+        notifications.append({
+            "departmentKey": department,
+            "department": TODO_DEPARTMENTS[department],
+            "success": not isinstance(result, Exception),
+            "message": "已发送" if not isinstance(result, Exception) else str(result),
+        })
+    return {
+        "ok": all(item["success"] for item in notifications),
+        "order": order_payload(db, order, True),
+        "notifications": notifications,
+    }
+
+
+@app.post("/api/stock-orders/{order_id}/notify-retry")
+async def api_retry_stock_order_notifications(
+    order_id: int, payload: OaTodoRetryPayload, request: Request, db: Session = Depends(get_db),
+):
+    departments = list(dict.fromkeys(payload.departments))
+    if set(departments) == set(TODO_DEPARTMENTS):
+        user = _require_permission(request, db, "can_manage_users")
+    else:
+        user = _require_permission(request, db, "can_update_stock_orders")
+    if not settings.oa_todo_username or not settings.oa_todo_password:
+        raise HTTPException(503, "OA 待办接口凭证尚未配置")
+    if not departments or any(key not in TODO_DEPARTMENTS for key in departments):
+        raise HTTPException(400, "重发部门无效")
+    order = db.query(StockOrder).filter_by(id=order_id, deleted_at=None).one_or_none()
+    if not order:
+        raise HTTPException(404, "订单不存在")
+    configured = _oa_todo_department_configs(db)
+    selected_ids = {user_id for key in departments for user_id in configured[key]["userIds"]}
+    recipients = db.query(User).filter(
+        User.id.in_(selected_ids or {-1}), User.deleted_at.is_(None), User.is_active.is_(True),
+        User.oa_login_phone.isnot(None), User.oa_login_phone != "",
+    ).all()
+    recipients_by_id = {item.id: item for item in recipients}
+    for key in departments:
+        if not configured[key]["userIds"] or any(
+            user_id not in recipients_by_id for user_id in configured[key]["userIds"]
+        ):
+            raise HTTPException(400, f"{TODO_DEPARTMENTS[key]}接收人配置无效，请管理员检查用户状态和 OA 手机号")
+    contexts = {
+        key: build_todo_context(
+            order, key, configured[key], settings,
+            [recipients_by_id[user_id].oa_login_phone for user_id in configured[key]["userIds"]],
+        )
+        for key in departments
+    }
+    results = await asyncio.gather(
+        *(asyncio.to_thread(send_todo, context, settings) for context in contexts.values()),
+        return_exceptions=True,
+    )
+    notifications = [{
+        "departmentKey": key,
+        "department": TODO_DEPARTMENTS[key],
+        "success": not isinstance(result, Exception),
+        "message": "已发送" if not isinstance(result, Exception) else str(result),
+    } for (key, _), result in zip(contexts.items(), results)]
+    _log_activity(db, user, "retry_stock_order_todos", "stock-orders", f"{order.order_no} · 重发 OA 待办")
+    return {"ok": all(item["success"] for item in notifications), "order": order_payload(db, order, True), "notifications": notifications}
 
 
 @app.put("/api/stock-orders/{order_id}")
